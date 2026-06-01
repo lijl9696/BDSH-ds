@@ -1,0 +1,15 @@
+[project]
+name = "tg-report-tool"
+version = "0.1.0"
+description = "Local Excel report processing and ranking image generator for Meituan and Douyin operations."
+requires-python = ">=3.10"
+dependencies = [
+  "pandas",
+  "openpyxl",
+  "pillow",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
