@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import load_config
-from .excel_report import write_excel_report
+from .excel_report import write_platform_excel_reports
 from .history import archive_result
 from .images import generate_report_images
 from .processor import process_reports
@@ -27,9 +27,10 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_path = write_excel_report(result, output_dir / f"报表输出_{timestamp}.xlsx", args.template)
+    excel_paths = write_platform_excel_reports(result, output_dir, timestamp, args.template)
     db_path = archive_result(result, Path("data") / "history.sqlite")
-    print(f"Excel: {excel_path}")
+    for excel_path in excel_paths:
+        print(f"Excel: {excel_path}")
     print(f"History: {db_path}")
     if args.images:
         image_paths = generate_report_images(result, config.rankings, config.briefings, output_dir / "images" / timestamp, args.brand)

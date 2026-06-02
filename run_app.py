@@ -1,4 +1,5 @@
 from pathlib import Path
+import multiprocessing
 import sys
 
 
@@ -9,4 +10,5 @@ from tg_reporter.app_tk import main
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+import multiprocessing
 from pathlib import Path
+import queue
 import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -10,22 +12,59 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageDraw, ImageTk
 
 from .config import load_config
-from .excel_report import write_excel_report
+from .excel_report import MEITUAN_TEMPLATE, write_platform_excel_reports
 from .history import archive_result
 from .images import generate_report_images
 from .paths import app_root
 from .processor import ProcessResult, process_reports
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except Exception:  # pragma: no cover - drag/drop is optional at runtime
+    DND_FILES = None
+    TkinterDnD = None
 
 
 ROOT = app_root()
 ICON_DIR = ROOT / "assets" / "icons"
 ICON_SIZE = 40
 APP_ICON_SIZE = 128
+TITLE_ICON_SIZE = 128
 FILE_PATH_WIDTH = 280
 FILE_PATH_HEIGHT = 34
+SUPPORTED_REPORT_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".csv"}
 
 
-class ReportApp(tk.Tk):
+BaseTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
+
+
+def _excel_worker(payload: dict[str, str], output_queue) -> None:
+    try:
+        config = load_config(payload["config_path"])
+        report_paths = {
+            "meituan": payload.get("meituan_path") or None,
+            "douyin": payload.get("douyin_path") or None,
+        }
+        result = process_reports(config, report_paths)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(payload["output_dir"])
+        output_paths = write_platform_excel_reports(result, output_dir, timestamp, payload["template_path"])
+        db_path = archive_result(result, Path(payload["root"]) / "data" / "history.sqlite")
+        output_queue.put(
+            {
+                "ok": True,
+                "rows": len(result.combined_detail),
+                "period_start": result.period_start,
+                "period_end": result.period_end,
+                "output_paths": [str(path) for path in output_paths],
+                "db_path": str(db_path),
+            }
+        )
+    except Exception as exc:
+        output_queue.put({"ok": False, "error": str(exc), "traceback": traceback.format_exc()})
+
+
+class ReportApp(BaseTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("团购运营报表工具")
@@ -35,7 +74,7 @@ class ReportApp(tk.Tk):
         self.configure(bg="#F7F7F8")
 
         self.config_path = tk.StringVar(value=str(ROOT / "配置表" / "报表工具配置模板.xlsx"))
-        self.template_path = tk.StringVar(value=str(ROOT / "配置表" / "输出报表模板.xlsx"))
+        self.template_path = tk.StringVar(value=str(MEITUAN_TEMPLATE))
         self.output_dir = tk.StringVar(value=str(ROOT / "outputs"))
         self.meituan_path = tk.StringVar(value="")
         self.douyin_path = tk.StringVar(value="")
@@ -53,6 +92,12 @@ class ReportApp(tk.Tk):
         self.action_button_frame: tk.Frame | None = None
         self.scroll_canvas: tk.Canvas | None = None
         self._mousewheel_bound_widgets: set[str] = set()
+        self.active_process: multiprocessing.Process | None = None
+        self.active_queue = None
+        self.progress_window: tk.Toplevel | None = None
+        self.progress_bar: ttk.Progressbar | None = None
+        self.progress_message: tk.StringVar | None = None
+        self.task_cancelled = False
 
         self._load_icons()
         self._configure_styles()
@@ -79,8 +124,12 @@ class ReportApp(tk.Tk):
         header.grid(row=0, column=0, sticky=tk.EW, padx=22, pady=(20, 12))
         header.columnconfigure(0, weight=1)
 
-        title = tk.Label(header, text="团购运营报表工具", bg="#F7F7F8", fg="#101214", font=self._font(24, "bold"))
-        title.grid(row=0, column=0, sticky=tk.W)
+        title_row = tk.Frame(header, bg="#F7F7F8")
+        title_row.grid(row=0, column=0, sticky=tk.W)
+        logo = tk.Label(title_row, image=self._icon("app_title"), bg="#F7F7F8")
+        logo.pack(side=tk.LEFT, padx=(0, 10))
+        title = tk.Label(title_row, text="团购运营报表工具", bg="#F7F7F8", fg="#101214", font=self._font(24, "bold"))
+        title.pack(side=tk.LEFT)
         subtitle = tk.Label(
             header,
             text="导入平台报表，生成 Excel 汇总、综合简报与排行榜图片",
@@ -142,8 +191,8 @@ class ReportApp(tk.Tk):
     def _build_import_section(self, body: tk.Frame) -> None:
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=1)
-        self.file_cards["meituan"] = self._file_card(body, "美团报表", self.meituan_path, "meituan", self._pick_meituan, 0)
-        self.file_cards["douyin"] = self._file_card(body, "抖音报表", self.douyin_path, "douyin", self._pick_douyin, 1)
+        self.file_cards["meituan"] = self._file_card(body, "美团报表", self.meituan_path, "meituan", self._pick_meituan, "meituan", 0)
+        self.file_cards["douyin"] = self._file_card(body, "抖音报表", self.douyin_path, "douyin", self._pick_douyin, "douyin", 1)
 
     def _build_action_section(self, body: tk.Frame) -> None:
         body.columnconfigure(0, weight=1)
@@ -215,7 +264,7 @@ class ReportApp(tk.Tk):
         self._bind_mousewheel_recursive(outer)
         return outer
 
-    def _file_card(self, parent: tk.Frame, title: str, var: tk.StringVar, icon_name: str, command, column: int) -> dict[str, object]:
+    def _file_card(self, parent: tk.Frame, title: str, var: tk.StringVar, icon_name: str, command, platform: str, column: int) -> dict[str, object]:
         card = tk.Frame(parent, bg="#FAFBFC", highlightthickness=1, highlightbackground="#E5E7EB")
         card.grid(row=0, column=column, sticky=tk.NSEW, padx=(0, 8) if column == 0 else (8, 0))
         card.columnconfigure(0, weight=1)
@@ -237,8 +286,10 @@ class ReportApp(tk.Tk):
         clear.bind("<Button-1>", lambda event, variable=var, label=path, clear_button=clear: self._clear_file(event, variable, label, clear_button))
         for widget in (card, icon, name, path_box, path):
             widget.bind("<Button-1>", lambda _event: command())
+            self._register_drop_target(widget, platform)
         var.trace_add("write", lambda *_args, label=path, variable=var, clear_button=clear: self._update_file_label(label, variable, clear_button))
         self._bind_mousewheel_recursive(card)
+        self._register_drop_target(card, platform)
         return {"frame": card, "path": path, "clear": clear, "var": var}
 
     def _action_button(self, text: str, icon_name: str, command, primary: bool) -> None:
@@ -409,6 +460,7 @@ class ReportApp(tk.Tk):
         for name in ["app", "file", "meituan", "douyin", "excel", "image", "refresh"]:
             size = APP_ICON_SIZE if name == "app" else ICON_SIZE
             self.icons[name] = self._load_icon(name, size)
+        self.icons["app_title"] = self._load_icon("app", TITLE_ICON_SIZE)
 
     def _load_icon(self, name: str, size: int) -> ImageTk.PhotoImage:
         path = ICON_DIR / f"{name}.png"
@@ -473,6 +525,47 @@ class ReportApp(tk.Tk):
         self._log("已清除已选择的报表。")
         return "break"
 
+    def _register_drop_target(self, widget: tk.Widget, platform: str) -> None:
+        if DND_FILES is None or not hasattr(widget, "drop_target_register"):
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", lambda event, target=platform: self._handle_drop(event, target))
+        except Exception:
+            return
+
+    def _handle_drop(self, event, platform: str) -> None:
+        paths = self._parse_drop_paths(getattr(event, "data", ""))
+        if not paths:
+            return
+        path = paths[0]
+        if path.suffix.lower() not in SUPPORTED_REPORT_SUFFIXES:
+            messagebox.showwarning("文件类型不支持", "请拖入 .xlsx、.xls、.xlsm 或 .csv 报表文件。")
+            return
+        if platform == "meituan":
+            self.meituan_path.set(str(path))
+            self._log(f"已拖入美团报表：{path}")
+        else:
+            self.douyin_path.set(str(path))
+            self._log(f"已拖入抖音报表：{path}")
+
+    def _parse_drop_paths(self, data: str) -> list[Path]:
+        if not data:
+            return []
+        try:
+            items = self.tk.splitlist(data)
+        except tk.TclError:
+            items = [data]
+        paths = []
+        for item in items:
+            text = str(item).strip()
+            if text.startswith("file://"):
+                text = text[7:]
+            path = Path(text)
+            if path.exists() and path.is_file():
+                paths.append(path)
+        return paths
+
     def _short_path(self, value: str) -> str:
         path = Path(value)
         try:
@@ -520,20 +613,116 @@ class ReportApp(tk.Tk):
             self._log(f"已选择抖音报表：{path}")
 
     def _generate_excel(self) -> None:
+        if self.active_process is not None and self.active_process.is_alive():
+            messagebox.showwarning("正在处理", "当前已有任务在运行，请等待完成或取消。")
+            return
+        if not self.meituan_path.get().strip() and not self.douyin_path.get().strip():
+            messagebox.showwarning("未选择报表", "请先选择或拖入至少一个平台报表。")
+            return
+
+        payload = {
+            "config_path": self.config_path.get(),
+            "template_path": self.template_path.get(),
+            "output_dir": self.output_dir.get(),
+            "meituan_path": self.meituan_path.get().strip(),
+            "douyin_path": self.douyin_path.get().strip(),
+            "root": str(ROOT),
+        }
+        ctx = multiprocessing.get_context("spawn")
+        self.active_queue = ctx.Queue()
+        self.active_process = ctx.Process(target=_excel_worker, args=(payload, self.active_queue))
+        self.task_cancelled = False
+        self._show_progress("正在生成 Excel 报表", "正在处理数据，请稍候...")
+        self.active_process.start()
+        self.summary_text.set("正在处理")
+        self._poll_excel_task()
+
+    def _show_progress(self, title: str, message: str) -> None:
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.configure(bg="#FFFFFF")
+        win.transient(self)
+        win.grab_set()
+        win.geometry("420x168")
+        win.resizable(False, False)
+        win.protocol("WM_DELETE_WINDOW", self._cancel_active_task)
+        self.progress_window = win
+        self.progress_message = tk.StringVar(value=message)
+
+        frame = tk.Frame(win, bg="#FFFFFF")
+        frame.pack(fill=tk.BOTH, expand=True, padx=22, pady=20)
+        tk.Label(frame, text=title, bg="#FFFFFF", fg="#101214", font=self._font(14, "bold")).pack(anchor=tk.W)
+        tk.Label(frame, textvariable=self.progress_message, bg="#FFFFFF", fg="#6B7280", font=self._font(11)).pack(anchor=tk.W, pady=(6, 14))
+        self.progress_bar = ttk.Progressbar(frame, mode="indeterminate")
+        self.progress_bar.pack(fill=tk.X)
+        self.progress_bar.start(12)
+        buttons = tk.Frame(frame, bg="#FFFFFF")
+        buttons.pack(fill=tk.X, pady=(16, 0))
+        ttk.Button(buttons, text="取消运算", command=self._cancel_active_task, style="Secondary.TButton").pack(side=tk.RIGHT)
+
+    def _cancel_active_task(self) -> None:
+        self.task_cancelled = True
+        if self.active_process is not None and self.active_process.is_alive():
+            self.active_process.terminate()
+            self.active_process.join(timeout=1)
+        self._close_progress()
+        self.summary_text.set("已取消")
+        self._log("已取消当前运算。")
+
+    def _close_progress(self) -> None:
+        if self.progress_bar is not None:
+            self.progress_bar.stop()
+            self.progress_bar = None
+        if self.progress_window is not None:
+            try:
+                self.progress_window.grab_release()
+                self.progress_window.destroy()
+            except tk.TclError:
+                pass
+            self.progress_window = None
+        self.progress_message = None
+
+    def _poll_excel_task(self) -> None:
+        if self.active_process is None or self.active_queue is None:
+            return
         try:
-            result = self._process()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_dir = Path(self.output_dir.get())
-            output_path = out_dir / f"报表输出_{timestamp}.xlsx"
-            write_excel_report(result, output_path, self.template_path.get())
-            db_path = archive_result(result, ROOT / "data" / "history.sqlite")
-            self.last_result = result
-            self.summary_text.set(f"{len(result.combined_detail)} 行已处理")
-            self._log(f"Excel 已生成：{output_path}")
+            message = self.active_queue.get_nowait()
+        except queue.Empty:
+            if self.active_process.is_alive():
+                self.after(180, self._poll_excel_task)
+                return
+            if self.task_cancelled:
+                self._cleanup_active_task()
+                return
+            message = {"ok": False, "error": "任务已结束，但没有返回结果。", "traceback": ""}
+
+        self._close_progress()
+        self._cleanup_active_task()
+        if message.get("ok"):
+            rows = message.get("rows", 0)
+            output_paths = message.get("output_paths", [])
+            db_path = message.get("db_path", "")
+            self.last_result = None
+            self.summary_text.set(f"{rows} 行已处理")
+            self._log("Excel 已生成：")
+            for output_path in output_paths:
+                self._log(f"  {output_path}")
             self._log(f"历史数据已归档：{db_path}")
-            messagebox.showinfo("完成", f"Excel 报表已生成：\n{output_path}")
-        except Exception as exc:
-            self._error(exc)
+            messagebox.showinfo("完成", "Excel 报表已生成：\n" + "\n".join(output_paths))
+        else:
+            self.summary_text.set("处理失败")
+            self._log("处理失败：" + str(message.get("error", "")))
+            if message.get("traceback"):
+                self._log(str(message["traceback"]))
+            messagebox.showerror("处理失败", str(message.get("error", "")))
+
+    def _cleanup_active_task(self) -> None:
+        if self.active_process is not None:
+            if self.active_process.is_alive():
+                self.active_process.terminate()
+            self.active_process.join(timeout=0.2)
+        self.active_process = None
+        self.active_queue = None
 
     def _generate_images(self) -> None:
         try:

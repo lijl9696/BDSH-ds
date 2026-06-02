@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 project_root = Path.cwd()
@@ -16,12 +16,15 @@ if not icon_path.exists() and icon_png.exists():
 
 hiddenimports = []
 hiddenimports += collect_submodules("openpyxl")
+hiddenimports += collect_submodules("tkinterdnd2")
+datas = []
+datas += collect_data_files("tkinterdnd2")
 
 a = Analysis(
     [str(project_root / "run_app.py")],
     pathex=[str(project_root), str(project_root / "src")],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
