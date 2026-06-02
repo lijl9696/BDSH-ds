@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +18,7 @@ ROOT = app_root()
 DEFAULT_TEMPLATE = ROOT / "配置表" / "输出报表模板.xlsx"
 MEITUAN_LOGO = ROOT / "assets" / "excel" / "meituan.png"
 MEITUAN_YELLOW = "FFD100"
+DEFAULT_FONT_NAME = "Microsoft YaHei"
 TRAFFIC_FIELDS = ["曝光人数(人)", "访问人数(人)", "下单人数(人)", "核销单量", "新客核销（人）", "新增评价", "新增好评"]
 BUSINESS_LEVELS = ["金牌", "银牌", "铜牌", "无等级"]
 
@@ -60,6 +62,7 @@ def write_excel_report(result: ProcessResult, output_path: str | Path, template_
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
+    _apply_default_font(wb)
     wb.save(output_path)
     return output_path
 
@@ -150,27 +153,25 @@ def _write_meituan_summary_sheet(wb, name: str, df: pd.DataFrame, result: Proces
     end_col = max(len(df.columns), 1)
 
     for col in range(1, end_col + 1):
-        ws.cell(1, col).fill = PatternFill("solid", fgColor="FFFFFF")
-        ws.cell(2, col).fill = PatternFill("solid", fgColor=MEITUAN_YELLOW)
-        ws.cell(3, col).fill = PatternFill("solid", fgColor="FFFFFF")
+        ws.cell(1, col).fill = PatternFill("solid", fgColor=MEITUAN_YELLOW)
+        ws.cell(2, col).fill = PatternFill("solid", fgColor="FFFFFF")
 
     ws.row_dimensions[1].height = 43
-    ws.row_dimensions[2].height = 28
-    ws.row_dimensions[3].height = 24
+    ws.row_dimensions[2].height = 24
     _add_meituan_logo(ws)
 
     title = f"{name}数据"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+    ws["A1"] = title
+    ws["A1"].font = Font(name=DEFAULT_FONT_NAME, bold=True, color="111827", size=14)
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
-    ws["A2"] = title
-    ws["A2"].font = Font(bold=True, color="111827", size=14)
+    ws["A2"] = _period_label(result)
+    ws["A2"].font = Font(name=DEFAULT_FONT_NAME, color="374151", size=11)
     ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
 
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=end_col)
-    ws["A3"] = _period_label(result)
-    ws["A3"].font = Font(color="374151", size=11)
-    ws["A3"].alignment = Alignment(horizontal="center", vertical="center")
-
-    _write_sheet(wb, name, df, start_row=4, clear=False)
+    _write_sheet(wb, name, df, start_row=3, clear=False)
 
 
 def _write_sheet(wb, name: str, df: pd.DataFrame, start_row: int = 1, clear: bool = True) -> None:
@@ -238,6 +239,15 @@ def _date_mmdd(value: str) -> str:
         return date.strftime("%m.%d")
     except Exception:
         return ""
+
+
+def _apply_default_font(wb) -> None:
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                current = copy(cell.font)
+                current.name = DEFAULT_FONT_NAME
+                cell.font = current
 
 
 def _clear_sheet(ws) -> None:
