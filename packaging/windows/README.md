@@ -29,6 +29,7 @@ dist\团购报表工具\团购报表工具.exe
 ```text
 配置表\报表工具配置模板.xlsx
 配置表\输出报表模板.xlsx
+assets\icons\app.png
 ```
 
 程序会输出到 exe 同级目录：

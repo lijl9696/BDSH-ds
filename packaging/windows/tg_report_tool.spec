@@ -6,6 +6,13 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path.cwd()
+icon_path = project_root / "assets" / "icons" / "app.ico"
+icon_png = project_root / "assets" / "icons" / "app.png"
+if not icon_path.exists() and icon_png.exists():
+    from PIL import Image
+
+    icon_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.open(icon_png).save(icon_path, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
 hiddenimports = []
 hiddenimports += collect_submodules("openpyxl")
@@ -41,6 +48,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(icon_path) if icon_path.exists() else None,
 )
 
 coll = COLLECT(

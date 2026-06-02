@@ -31,6 +31,12 @@ if exist "dist\团购报表工具\配置表" rmdir /s /q "dist\团购报表工�
 xcopy "配置表" "dist\团购报表工具\配置表" /E /I /Y >nul
 if errorlevel 1 goto :error
 
+if exist "assets" (
+  if exist "dist\团购报表工具\assets" rmdir /s /q "dist\团购报表工具\assets"
+  xcopy "assets" "dist\团购报表工具\assets" /E /I /Y >nul
+  if errorlevel 1 goto :error
+)
+
 if not exist "dist\团购报表工具\outputs" mkdir "dist\团购报表工具\outputs"
 if not exist "dist\团购报表工具\data" mkdir "dist\团购报表工具\data"
 

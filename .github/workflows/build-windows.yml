@@ -1,5 +1,8 @@
 name: Build Windows App
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
   push:
@@ -35,6 +38,9 @@ jobs:
         run: |
           $appDir = "dist/团购报表工具"
           Copy-Item -Path "配置表" -Destination "$appDir/配置表" -Recurse -Force
+          if (Test-Path "assets") {
+            Copy-Item -Path "assets" -Destination "$appDir/assets" -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path "$appDir/outputs" | Out-Null
           New-Item -ItemType Directory -Force -Path "$appDir/data" | Out-Null
 

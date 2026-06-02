@@ -47,6 +47,7 @@ exe 同级目录会包含：
 
 ```text
 配置表
+assets
 outputs
 data
 ```
@@ -63,4 +64,10 @@ data
 ```text
 outputs
 data
+```
+
+程序图标可放在：
+
+```text
+assets\icons\app.png
 ```
