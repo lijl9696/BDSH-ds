@@ -69,7 +69,11 @@ REPORT_WEB_IMAGE=ghcr.io/lijl9696/bdsh-ds-report-web:latest
 REPORT_WEB_PORT=8000
 METABASE_PORT=3000
 POSTGRES_PORT=5432
+IMPORT_AUTH_USERNAME=admin
+IMPORT_AUTH_PASSWORD=换成另一个导入页登录密码
 ```
+
+`IMPORT_AUTH_USERNAME` 和 `IMPORT_AUTH_PASSWORD` 是导入页面 `http://群晖IP:8000` 的登录账号密码。建议数据库密码和导入页密码不要相同。
 
 6. 创建数据目录：
 
@@ -91,6 +95,32 @@ docker-compose -f docker-compose.synology.yml up -d
 ```text
 report-web: http://群晖IP:8000
 Metabase: http://群晖IP:3000
+```
+
+打开 `report-web` 时浏览器会弹出登录框，输入 `.env` 里的 `IMPORT_AUTH_USERNAME` 和 `IMPORT_AUTH_PASSWORD`。
+
+## Metabase 一直转圈
+
+Metabase 第一次启动会下载/初始化一些内部组件，可能需要几分钟。超过 5 分钟仍一直转圈时，在群晖终端检查：
+
+```bash
+docker ps | grep metabase
+docker logs --tail 200 tg-report-metabase
+docker port tg-report-metabase
+```
+
+重点看日志里是否有：
+
+- `/metabase-data` 目录权限错误。
+- Java 内存不足或容器被杀。
+- 端口没有映射到 `0.0.0.0:3000`。
+
+如果是权限问题，先停容器，再给数据目录写入权限：
+
+```bash
+docker-compose -f docker-compose.synology.yml stop metabase
+chmod -R 777 /volume1/docker/tg-report/metabase
+docker-compose -f docker-compose.synology.yml up -d metabase
 ```
 
 ## 日常升级

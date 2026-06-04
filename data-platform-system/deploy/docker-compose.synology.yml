@@ -39,6 +39,8 @@ services:
       UPLOAD_DIR: /data/uploads
       PRESET_PATH: /app/config/report_presets.yml
       PLATFORM_PROFILE_PATH: /app/config/platform_profiles.yml
+      IMPORT_AUTH_USERNAME: ${IMPORT_AUTH_USERNAME:-admin}
+      IMPORT_AUTH_PASSWORD: ${IMPORT_AUTH_PASSWORD:?set IMPORT_AUTH_PASSWORD in .env}
     volumes:
       - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/uploads:/data/uploads
 

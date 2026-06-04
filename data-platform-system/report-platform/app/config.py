@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/data/uploads")
     preset_path: Path = Path("/app/config/report_presets.yml")
     platform_profile_path: Path = Path("/app/config/platform_profiles.yml")
+    import_auth_username: str = "admin"
+    import_auth_password: str = "change_me"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

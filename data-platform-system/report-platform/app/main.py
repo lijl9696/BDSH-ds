@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+from .auth import BasicAuthMiddleware
 from .config import settings
 from .db import create_all
 from .routers import health, imports, metrics, reports, store_config, summary
@@ -12,6 +13,7 @@ from .routers import health, imports, metrics, reports, store_config, summary
 
 app = FastAPI(title=settings.app_name)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.add_middleware(BasicAuthMiddleware, exempt_paths={"/health"})
 
 
 @app.on_event("startup")
