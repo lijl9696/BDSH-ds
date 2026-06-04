@@ -1,0 +1,68 @@
+reports:
+  - code: national_monthly_overview
+    name: 全国月度经营总览
+    time_grain: month
+    default_time_range: current_month
+    platforms: all
+    stores: all
+    group_by:
+      - time
+      - platform
+      - region
+    metrics:
+      - exposure
+      - visit
+      - paid_order_count
+      - new_customer_count
+      - paid_amount
+      - verified_count
+      - verified_user_count
+      - verified_amount
+      - order_conversion_rate
+      - verification_rate
+      - avg_verified_amount
+    sort:
+      metric: verified_amount
+      direction: desc
+
+  - code: store_monthly_report
+    name: 门店月度报表
+    time_grain: month
+    default_time_range: current_month
+    platforms: all
+    stores: selectable
+    group_by:
+      - time
+      - store
+      - platform
+    metrics:
+      - exposure
+      - visit
+      - paid_order_count
+      - new_customer_count
+      - paid_amount
+      - verified_count
+      - verified_user_count
+      - verified_amount
+      - order_conversion_rate
+      - verification_rate
+
+  - code: low_conversion_watchlist
+    name: 高曝光低转化门店
+    time_grain: month
+    default_time_range: current_month
+    platforms: all
+    stores: all
+    group_by:
+      - store
+      - platform
+    metrics:
+      - exposure
+      - visit
+      - paid_order_count
+      - order_conversion_rate
+    filters:
+      min_exposure: 1000
+    sort:
+      metric: order_conversion_rate
+      direction: asc
