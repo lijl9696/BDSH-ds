@@ -339,7 +339,7 @@
 	          <h1>团购数据导入</h1>
 	          <p class="sub">上传平台报表，先预览字段和重复数据，确认后再写入指标库。</p>
 	        </div>
-	        <a class="dashboard-link" href="http://127.0.0.1:3000/dashboard/2">打开仪表盘</a>
+	        <a id="dashboardLink" class="dashboard-link" href="/dashboard/2">打开仪表盘</a>
 	      </div>
 	    </header>
 
@@ -436,7 +436,12 @@
 	      const storeConfigFile = document.querySelector("#storeConfigFile");
 	      const storeConfigFileName = document.querySelector("#storeConfigFileName");
 	      const storeConfigStatus = document.querySelector("#storeConfigStatus");
+	      const dashboardLink = document.querySelector("#dashboardLink");
 	      let currentBatchId = null;
+
+	      if (dashboardLink) {
+	        dashboardLink.href = `${window.location.protocol}//${window.location.hostname}:3000/dashboard/2`;
+	      }
 
       function setStatus(text) {
         statusBox.textContent = text;
