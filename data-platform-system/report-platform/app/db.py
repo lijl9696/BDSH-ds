@@ -29,6 +29,7 @@ def create_all() -> None:
 
     Base.metadata.create_all(bind=engine)
     ensure_server_defaults()
+    ensure_constraints()
 
 
 def ensure_server_defaults() -> None:
@@ -56,6 +57,22 @@ def ensure_server_defaults() -> None:
         "ALTER TABLE stores ALTER COLUMN status SET DEFAULT 'active'",
         "ALTER TABLE stores ALTER COLUMN aliases SET DEFAULT '{}'::jsonb",
         "ALTER TABLE area_assignments ALTER COLUMN store_name SET DEFAULT ''",
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
+
+
+def ensure_constraints() -> None:
+    statements = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_platforms_code ON platforms(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_stores_store_code ON stores(store_code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_metrics_code ON metrics(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_mapping_platform_source ON field_mappings(platform_code, source_field)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_derived_metric_rules_metric_code ON derived_metric_rules(metric_code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_presets_code ON report_presets(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_assignment_platform_name ON store_assignments(platform_code, store_name)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_area_assignment_province_city_store ON area_assignments(province, city, store_name)",
     ]
     with engine.begin() as connection:
         for statement in statements:
