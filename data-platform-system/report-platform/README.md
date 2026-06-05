@@ -86,6 +86,12 @@ config/default_field_mappings.yml
 config/platform_profiles.yml
 ```
 
+Metabase SQL 卡片和仪表盘筛选器配置规范见：
+
+```text
+docs/metabase_dashboard_guide.md
+```
+
 已分析过的平台样本结构见：
 
 ```text
