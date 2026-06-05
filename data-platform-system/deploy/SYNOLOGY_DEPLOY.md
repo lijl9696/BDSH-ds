@@ -68,12 +68,14 @@ TG_REPORT_DATA_DIR=/volume1/docker/tg-report
 REPORT_WEB_IMAGE=ghcr.io/lijl9696/bdsh-ds-report-web:latest
 REPORT_WEB_PORT=8000
 METABASE_PORT=3000
-POSTGRES_PORT=5432
+POSTGRES_PORT=5729
 IMPORT_AUTH_USERNAME=admin
 IMPORT_AUTH_PASSWORD=换成另一个导入页登录密码
 ```
 
 `IMPORT_AUTH_USERNAME` 和 `IMPORT_AUTH_PASSWORD` 是导入页面 `http://群晖IP:8000` 的登录账号密码。建议数据库密码和导入页密码不要相同。
+
+`POSTGRES_PORT=5729` 表示群晖宿主机对外暴露 `5729` 端口，避免和群晖自身或其他服务的 `5432` 冲突。容器内部访问 Postgres 仍然是 `postgres:5432`，所以 `DATABASE_URL` 不需要改成 5729。
 
 6. 创建数据目录：
 

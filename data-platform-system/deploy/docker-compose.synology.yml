@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: tg_report
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5729}:5432"
     volumes:
       - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/postgres:/var/lib/postgresql/data
       - ../report-platform/db/init:/docker-entrypoint-initdb.d:ro
