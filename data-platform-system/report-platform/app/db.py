@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -86,4 +86,4 @@ def seed_defaults() -> None:
     statements = [statement.strip() for statement in sql.split(";\n\n") if statement.strip()]
     with engine.begin() as connection:
         for statement in statements:
-            connection.exec_driver_sql(statement if statement.endswith(";") else f"{statement};")
+            connection.execute(text(statement if statement.endswith(";") else f"{statement};"))
