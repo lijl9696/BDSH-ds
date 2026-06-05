@@ -28,6 +28,38 @@ def create_all() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    ensure_server_defaults()
+
+
+def ensure_server_defaults() -> None:
+    statements = [
+        "ALTER TABLE platforms ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE metrics ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE field_mappings ALTER COLUMN clean_rule SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE field_mappings ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE import_batches ALTER COLUMN status SET DEFAULT 'pending'",
+        "ALTER TABLE import_batches ALTER COLUMN duplicate_policy SET DEFAULT 'skip'",
+        "ALTER TABLE import_batches ALTER COLUMN source_type SET DEFAULT 'file'",
+        "ALTER TABLE import_batches ALTER COLUMN import_options SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE import_batches ALTER COLUMN row_count SET DEFAULT 0",
+        "ALTER TABLE import_batches ALTER COLUMN warning_count SET DEFAULT 0",
+        "ALTER TABLE metric_values ALTER COLUMN dimensions SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE metric_values ALTER COLUMN dimension_hash SET DEFAULT 'default'",
+        "ALTER TABLE metric_values ALTER COLUMN version SET DEFAULT 1",
+        "ALTER TABLE metric_values ALTER COLUMN is_active SET DEFAULT TRUE",
+        "ALTER TABLE text_metric_values ALTER COLUMN dimensions SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE text_metric_values ALTER COLUMN dimension_hash SET DEFAULT 'default'",
+        "ALTER TABLE text_metric_values ALTER COLUMN version SET DEFAULT 1",
+        "ALTER TABLE text_metric_values ALTER COLUMN is_active SET DEFAULT TRUE",
+        "ALTER TABLE derived_metric_rules ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE report_presets ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE stores ALTER COLUMN status SET DEFAULT 'active'",
+        "ALTER TABLE stores ALTER COLUMN aliases SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE area_assignments ALTER COLUMN store_name SET DEFAULT ''",
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
 
 
 def seed_defaults() -> None:

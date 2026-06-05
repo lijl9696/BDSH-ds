@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,7 +16,7 @@ class Platform(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128))
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
 
 
 class Store(Base):
@@ -29,8 +29,8 @@ class Store(Base):
     city: Mapped[str | None] = mapped_column(String(128))
     region: Mapped[str | None] = mapped_column(String(128), index=True)
     owner: Mapped[str | None] = mapped_column(String(128), index=True)
-    status: Mapped[str] = mapped_column(String(32), default="active")
-    aliases: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="active", server_default=text("'active'"))
+    aliases: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
 
 
 class StoreAssignment(Base):
@@ -54,7 +54,7 @@ class AreaAssignment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     province: Mapped[str] = mapped_column(String(128), index=True)
     city: Mapped[str] = mapped_column(String(128), index=True)
-    store_name: Mapped[str] = mapped_column(String(255), default="", index=True)
+    store_name: Mapped[str] = mapped_column(String(255), default="", server_default=text("''"), index=True)
     region: Mapped[str] = mapped_column(String(128), index=True)
     owner: Mapped[str] = mapped_column(String(128), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -68,8 +68,8 @@ class Metric(Base):
     name: Mapped[str] = mapped_column(String(255))
     value_type: Mapped[str] = mapped_column(String(32), default="number")
     unit: Mapped[str | None] = mapped_column(String(64))
-    aggregation: Mapped[str] = mapped_column(String(64), default="sum")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    aggregation: Mapped[str] = mapped_column(String(64), default="sum", server_default=text("'sum'"))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
     description: Mapped[str | None] = mapped_column(Text)
 
 
@@ -82,8 +82,8 @@ class FieldMapping(Base):
     source_field: Mapped[str] = mapped_column(String(255))
     metric_code: Mapped[str] = mapped_column(String(128), ForeignKey("metrics.code"))
     data_type: Mapped[str] = mapped_column(String(32), default="number")
-    clean_rule: Mapped[dict] = mapped_column(JSONB, default=dict)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    clean_rule: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
 
 
 class ImportBatch(Base):
@@ -93,12 +93,12 @@ class ImportBatch(Base):
     platform_code: Mapped[str] = mapped_column(String(64), index=True)
     period_start: Mapped[date] = mapped_column(Date, index=True)
     period_end: Mapped[date] = mapped_column(Date, index=True)
-    source_type: Mapped[str] = mapped_column(String(32), default="file")
-    status: Mapped[str] = mapped_column(String(32), default="pending")
-    duplicate_policy: Mapped[str] = mapped_column(String(32), default="skip")
-    import_options: Mapped[dict] = mapped_column(JSONB, default=dict)
-    row_count: Mapped[int] = mapped_column(Integer, default=0)
-    warning_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_type: Mapped[str] = mapped_column(String(32), default="file", server_default=text("'file'"))
+    status: Mapped[str] = mapped_column(String(32), default="pending", server_default=text("'pending'"))
+    duplicate_policy: Mapped[str] = mapped_column(String(32), default="skip", server_default=text("'skip'"))
+    import_options: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    row_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    warning_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     files: Mapped[list["ImportFile"]] = relationship(back_populates="batch")
@@ -124,7 +124,7 @@ class RawImportRow(Base):
     batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True)
     row_number: Mapped[int] = mapped_column(Integer)
     raw_data: Mapped[dict] = mapped_column(JSONB)
-    normalized_keys: Mapped[dict] = mapped_column(JSONB, default=dict)
+    normalized_keys: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     warning: Mapped[str | None] = mapped_column(Text)
 
 
@@ -149,10 +149,10 @@ class MetricValue(Base):
     store_code: Mapped[str] = mapped_column(String(128), index=True)
     metric_code: Mapped[str] = mapped_column(String(128), ForeignKey("metrics.code"), index=True)
     value: Mapped[Decimal] = mapped_column(Numeric(20, 4))
-    dimensions: Mapped[dict] = mapped_column(JSONB, default=dict)
-    dimension_hash: Mapped[str] = mapped_column(String(64), default="default")
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    dimensions: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    dimension_hash: Mapped[str] = mapped_column(String(64), default="default", server_default=text("'default'"))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -177,10 +177,10 @@ class TextMetricValue(Base):
     store_code: Mapped[str] = mapped_column(String(128), index=True)
     metric_code: Mapped[str] = mapped_column(String(128), ForeignKey("metrics.code"), index=True)
     value: Mapped[str] = mapped_column(String(255))
-    dimensions: Mapped[dict] = mapped_column(JSONB, default=dict)
-    dimension_hash: Mapped[str] = mapped_column(String(64), default="default")
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    dimensions: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    dimension_hash: Mapped[str] = mapped_column(String(64), default="default", server_default=text("'default'"))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -192,7 +192,7 @@ class DerivedMetricRule(Base):
     expression: Mapped[str] = mapped_column(Text)
     numerator_metric: Mapped[str | None] = mapped_column(String(128))
     denominator_metric: Mapped[str | None] = mapped_column(String(128))
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
 
 
 class ReportPreset(Base):
@@ -202,4 +202,4 @@ class ReportPreset(Base):
     code: Mapped[str] = mapped_column(String(128), unique=True)
     name: Mapped[str] = mapped_column(String(255))
     config: Mapped[dict] = mapped_column(JSONB)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
