@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .auth import BasicAuthMiddleware
 from .config import settings
-from .db import create_all
+from .db import create_all, seed_defaults
 from .routers import health, imports, metrics, reports, store_config, summary
 
 
@@ -19,6 +19,7 @@ app.add_middleware(BasicAuthMiddleware, exempt_paths={"/health"})
 @app.on_event("startup")
 def on_startup() -> None:
     create_all()
+    seed_defaults()
 
 
 app.include_router(health.router)

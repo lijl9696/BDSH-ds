@@ -28,3 +28,13 @@ def create_all() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+
+
+def seed_defaults() -> None:
+    if not settings.seed_path.exists():
+        return
+    sql = settings.seed_path.read_text(encoding="utf-8")
+    statements = [statement.strip() for statement in sql.split(";\n\n") if statement.strip()]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement if statement.endswith(";") else f"{statement};")

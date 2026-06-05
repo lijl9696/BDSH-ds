@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/data/uploads")
     preset_path: Path = Path("/app/config/report_presets.yml")
     platform_profile_path: Path = Path("/app/config/platform_profiles.yml")
+    seed_path: Path = Path("/app/db/init/002_seed.sql")
     import_auth_username: str = "admin"
     import_auth_password: str = "change_me"
 
