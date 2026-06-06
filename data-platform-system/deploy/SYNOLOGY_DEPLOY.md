@@ -143,6 +143,91 @@ docker-compose -f docker-compose.synology.yml up -d report-web
 
 这只会更新应用容器，不会删除 Postgres 数据、Metabase 数据和上传文件。
 
+### 版本确认和镜像更新
+
+`latest` 不是固定版本号，它会随着 GitHub Actions 构建移动。日常排查时用下面三类信息确认版本：
+
+1. 代码仓库版本：
+
+```bash
+cd /volume1/docker/BDSH-ds
+git log --oneline -1
+```
+
+2. 本地镜像版本：
+
+```bash
+docker image inspect ghcr.io/lijl9696/bdsh-ds-report-web:latest \
+  --format 'created={{.Created}} revision={{index .Config.Labels "org.opencontainers.image.revision"}} digest={{join .RepoDigests ","}}'
+
+docker image inspect ghcr.io/lijl9696/bdsh-ds-collector:latest \
+  --format 'created={{.Created}} revision={{index .Config.Labels "org.opencontainers.image.revision"}} digest={{join .RepoDigests ","}}'
+```
+
+3. 正在运行的容器使用的镜像：
+
+```bash
+docker inspect tg-report-web \
+  --format 'image_id={{.Image}} created={{.Created}}'
+
+docker inspect tg-report-collector \
+  --format 'image_id={{.Image}} created={{.Created}}'
+```
+
+确认 collector 是否是新版 CLI：
+
+```bash
+cd /volume1/docker/BDSH-ds/data-platform-system/deploy
+docker-compose -f docker-compose.synology.yml run --rm collector python -m collector.cli -h
+```
+
+新版应该能看到：
+
+```text
+{run,download,login}
+```
+
+如果只看到 `{run,login}`，说明 collector 镜像或容器仍是旧版。
+
+升级完整流程：
+
+```bash
+cd /volume1/docker/BDSH-ds
+git fetch origin main --verbose
+git reset --hard origin/main
+
+cd /volume1/docker/BDSH-ds/data-platform-system/deploy
+docker-compose -f docker-compose.synology.yml pull report-web collector
+docker-compose -f docker-compose.synology.yml up -d --force-recreate report-web collector
+```
+
+如果只更新 collector：
+
+```bash
+cd /volume1/docker/BDSH-ds/data-platform-system/deploy
+docker-compose -f docker-compose.synology.yml stop collector
+docker-compose -f docker-compose.synology.yml rm -f collector
+docker-compose -f docker-compose.synology.yml pull collector
+docker-compose -f docker-compose.synology.yml up -d --force-recreate --no-deps collector
+```
+
+更新后检查：
+
+```bash
+docker-compose -f docker-compose.synology.yml run --rm collector python -m collector.cli -h
+docker logs --tail 80 tg-report-collector
+```
+
+如果仓库里的示例配置看起来还是旧的，先检查代码版本：
+
+```bash
+cd /volume1/docker/BDSH-ds
+git log --oneline -1
+grep -n "trigger_selector\|steps:\|download_selector" data-platform-system/collector/config/jobs.example.yml
+```
+
+新版 `jobs.example.yml` 不应该出现 `trigger_selector`，应该出现 `steps:` 和 `download_selector:`。
+
 ## 自动采集服务
 
 `collector` 默认会随 compose 启动，但如果 `jobs.yml` 里没有启用任务，只会写一条“没有启用的采集任务”的日志，不会自动访问平台。
