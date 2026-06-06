@@ -14,12 +14,16 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE_NAME: ghcr.io/lijl9696/bdsh-ds-report-web
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: ghcr.io/lijl9696/bdsh-ds-report-web
+            context: data-platform-system/report-platform
+          - image: ghcr.io/lijl9696/bdsh-ds-collector
+            context: data-platform-system/collector
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +42,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ matrix.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
@@ -46,7 +50,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: data-platform-system/report-platform
+          context: ${{ matrix.context }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

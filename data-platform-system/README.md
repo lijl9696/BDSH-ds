@@ -5,6 +5,7 @@
 ## 目录
 
 - `report-platform/`：FastAPI 后端、导入页面、平台配置、数据库结构。
+- `collector/`：Playwright 自动采集服务，负责下载平台报表并调用导入接口。
 - `deploy/`：Docker Compose 部署配置。
 
 ## 启动

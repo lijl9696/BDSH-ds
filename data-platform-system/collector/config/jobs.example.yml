@@ -1,0 +1,26 @@
+jobs:
+  - code: meituan_daily
+    enabled: false
+    platform_code: meituan
+    schedule_cron: "30 6 * * *"
+    state_file: meituan_state.json
+    report_page_url: "https://example.com/meituan/report-page"
+    trigger_selector: "text=生成报表"
+    download_center_url: "https://example.com/meituan/download-center"
+    download_selector: "text=下载"
+    duplicate_policy: skip
+    wait_after_trigger_seconds: 10
+    download_timeout_seconds: 600
+
+  - code: douyin_daily
+    enabled: false
+    platform_code: douyin
+    schedule_cron: "0 7 * * *"
+    state_file: douyin_state.json
+    report_page_url: "https://example.com/douyin/report-page"
+    trigger_selector: "text=生成报表"
+    download_center_url: "https://example.com/douyin/download-center"
+    download_selector: "text=下载"
+    duplicate_policy: skip
+    wait_after_trigger_seconds: 10
+    download_timeout_seconds: 600

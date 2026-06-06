@@ -9,6 +9,7 @@
 | 服务 | 镜像 | 数据保存位置 |
 | --- | --- | --- |
 | report-web | `ghcr.io/lijl9696/bdsh-ds-report-web:latest` | 上传文件挂载到 `${TG_REPORT_DATA_DIR}/uploads` |
+| collector | `ghcr.io/lijl9696/bdsh-ds-collector:latest` | 采集配置、登录态、下载文件和日志 |
 | postgres | `postgres:16` | `${TG_REPORT_DATA_DIR}/postgres` |
 | metabase | `metabase/metabase:v0.52.4` | `${TG_REPORT_DATA_DIR}/metabase` |
 | backup | `postgres:16` | `${TG_REPORT_DATA_DIR}/backups` |
@@ -84,6 +85,11 @@ mkdir -p /volume1/docker/tg-report/postgres
 mkdir -p /volume1/docker/tg-report/metabase
 mkdir -p /volume1/docker/tg-report/uploads
 mkdir -p /volume1/docker/tg-report/backups
+mkdir -p /volume1/docker/tg-report/collector/config
+mkdir -p /volume1/docker/tg-report/collector/downloads
+mkdir -p /volume1/docker/tg-report/collector/state
+mkdir -p /volume1/docker/tg-report/collector/logs
+cp ../collector/config/jobs.example.yml /volume1/docker/tg-report/collector/config/jobs.yml
 ```
 
 7. 启动：
@@ -136,6 +142,43 @@ docker-compose -f docker-compose.synology.yml up -d report-web
 ```
 
 这只会更新应用容器，不会删除 Postgres 数据、Metabase 数据和上传文件。
+
+## 自动采集服务
+
+`collector` 默认会随 compose 启动，但如果 `jobs.yml` 里没有启用任务，只会写一条“没有启用的采集任务”的日志，不会自动访问平台。
+
+配置文件在：
+
+```text
+/volume1/docker/tg-report/collector/config/jobs.yml
+```
+
+启用采集前，需要把里面的页面 URL 和按钮选择器改成真实平台后台信息，并把任务的 `enabled` 改成 `true`。
+
+查看日志：
+
+```bash
+docker logs --tail 100 tg-report-collector
+tail -n 100 /volume1/docker/tg-report/collector/logs/collector.log
+```
+
+手动执行某个任务：
+
+```bash
+docker exec -it tg-report-collector python -m collector.cli run meituan_daily
+```
+
+第一次登录态可以在有图形界面的机器生成，也可以后续单独做远程登录流程。登录态文件放在：
+
+```text
+/volume1/docker/tg-report/collector/state
+```
+
+采集服务详细说明见：
+
+```text
+../collector/README.md
+```
 
 ## 重要注意
 
