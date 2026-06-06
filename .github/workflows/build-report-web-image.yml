@@ -7,6 +7,7 @@ on:
       - master
     paths:
       - "data-platform-system/report-platform/**"
+      - "data-platform-system/collector/**"
       - ".github/workflows/build-report-web-image.yml"
   workflow_dispatch:
 
