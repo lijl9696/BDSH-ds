@@ -18,6 +18,9 @@ class Settings:
     state_dir: Path
     logs_dir: Path
     headless: bool
+    browser_channel: str | None
+    browser_user_data_dir: Path | None
+    browser_cdp_url: str | None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,13 @@ def load_settings() -> Settings:
         state_dir=Path(os.getenv("COLLECTOR_STATE_DIR", "/app/state")),
         logs_dir=Path(os.getenv("COLLECTOR_LOGS_DIR", "/app/logs")),
         headless=os.getenv("COLLECTOR_HEADLESS", "true").lower() not in {"0", "false", "no"},
+        browser_channel=os.getenv("COLLECTOR_BROWSER_CHANNEL") or None,
+        browser_user_data_dir=(
+            Path(os.environ["COLLECTOR_BROWSER_USER_DATA_DIR"])
+            if os.getenv("COLLECTOR_BROWSER_USER_DATA_DIR")
+            else None
+        ),
+        browser_cdp_url=os.getenv("COLLECTOR_BROWSER_CDP_URL") or None,
     )
 
 

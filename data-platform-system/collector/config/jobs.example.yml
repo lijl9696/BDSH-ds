@@ -8,15 +8,16 @@ jobs:
     download_mode: direct
     steps:
       - action: click
-        selector: "text=使用模板"
+        selector: "button[data-click-bid='b_cbg_x7daorvu_mc']:has-text('使用模板')"
       - action: wait
         seconds: 2
-      # TODO: 根据弹窗真实 DOM 调整时间范围选择器。
-      # - action: click
-      #   selector: "text=选择时间范围"
-      # - action: click
-      #   selector: "text=最近30天"
-    download_selector: "text=下载"
+      - action: click
+        selector: "input[placeholder='请选择时间范围']"
+      - action: click
+        selector: "text=昨天"
+      - action: wait
+        seconds: 4
+    download_selector: "button[data-click-bid='b_cbg_o9nfc94x_mc']:has-text('下载')"
     duplicate_policy: skip
     wait_after_trigger_seconds: 2
     download_timeout_seconds: 600

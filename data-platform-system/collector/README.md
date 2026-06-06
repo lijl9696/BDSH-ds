@@ -100,6 +100,25 @@ python -m collector.cli login meituan_daily --login-url "登录页面 URL"
 
 在 NAS 无图形界面时，更推荐先在本地可视化环境生成 `meituan_state.json`，再复制到 NAS 的 collector state 目录。
 
+如果平台在 Playwright 浏览器里拒绝登录，可以改用真实 Chrome 调试：
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$PWD/../runtime/collector/real-chrome-profile"
+```
+
+在这个 Chrome 里人工登录后台并进入报表中心，然后让 collector 连接它：
+
+```bash
+COLLECTOR_BROWSER_CDP_URL=http://127.0.0.1:9222 \
+COLLECTOR_JOBS_PATH=config/jobs.local.yml \
+COLLECTOR_DOWNLOADS_DIR=../runtime/collector/downloads \
+.venv/bin/python -m collector.cli download meituan_daily
+```
+
+这种模式不让 Playwright 执行登录，只用真实 Chrome 会话做已登录后的报表下载。
+
 ## 导入接口
 
 下载成功后会自动调用：

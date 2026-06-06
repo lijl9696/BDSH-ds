@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from .browser_runner import run_job, save_login_state
+from .browser_runner import download_job, run_job, save_login_state
 from .config import CollectorJob, load_jobs, load_settings
 
 
@@ -13,6 +13,9 @@ def main() -> None:
 
     run_parser = subparsers.add_parser("run", help="立即执行一个采集任务")
     run_parser.add_argument("job_code")
+
+    download_parser = subparsers.add_parser("download", help="只下载报表文件，不调用导入接口")
+    download_parser.add_argument("job_code")
 
     login_parser = subparsers.add_parser("login", help="人工登录并保存 Playwright storage_state")
     login_parser.add_argument("job_code")
@@ -27,6 +30,8 @@ def main() -> None:
 
     if args.command == "run":
         print(asyncio.run(run_job(job, settings)))
+    elif args.command == "download":
+        print(asyncio.run(download_job(job, settings)))
     elif args.command == "login":
         print(asyncio.run(save_login_state(job, settings, args.login_url)))
 
