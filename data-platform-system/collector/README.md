@@ -40,12 +40,16 @@ jobs:
     schedule_cron: "30 6 * * *"
     state_file: meituan_state.json
     report_page_url: "报表生成页面"
-    trigger_selector: "text=生成报表"
-    download_center_url: "下载中心页面"
+    download_mode: direct
+    steps:
+      - action: click
+        selector: "text=使用模板"
+      - action: wait
+        seconds: 2
     download_selector: "text=下载"
 ```
 
-`trigger_selector` 和 `download_selector` 是 Playwright locator。常用写法：
+`steps[].selector` 和 `download_selector` 是 Playwright locator。常用写法：
 
 ```text
 text=生成报表
@@ -53,6 +57,30 @@ text=下载
 button:has-text("下载")
 [data-testid="download"]
 ```
+
+下载模式：
+
+| 模式 | 说明 |
+| --- | --- |
+| `direct` | 点击下载按钮后浏览器直接下载 Excel，适合美团当前报表中心 |
+| `download_center` | 先触发生成，再进入下载中心点击下载，适合抖音这类分离流程 |
+
+步骤动作：
+
+| action | 字段 | 说明 |
+| --- | --- | --- |
+| `click` | `selector` | 点击元素 |
+| `fill` | `selector`、`value` | 输入文本 |
+| `wait` | `seconds` | 等待若干秒 |
+| `goto` | `url` | 跳转页面 |
+
+美团当前流程是直接下载型：
+
+```text
+报表中心 -> 使用模板 -> 弹窗选择时间范围 -> 下载 Excel
+```
+
+时间范围弹窗的选择器需要后续根据真实 DOM 再细化。
 
 ## 手动运行
 

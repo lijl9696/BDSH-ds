@@ -7,7 +7,7 @@ from pathlib import Path
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
-from .config import CollectorJob, Settings
+from .config import BrowserStep, CollectorJob, Settings
 from .import_client import ReportWebClient
 
 
@@ -68,9 +68,14 @@ async def save_login_state(job: CollectorJob, settings: Settings, login_url: str
 
 async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path:
     await page.goto(job.report_page_url, wait_until="domcontentloaded")
-    await page.locator(job.trigger_selector).click()
-    await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
-    await page.goto(job.download_center_url, wait_until="domcontentloaded")
+    for step in job.steps or []:
+        await _run_step(page, step)
+    if job.wait_after_trigger_seconds > 0:
+        await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
+    if job.download_mode == "download_center":
+        if not job.download_center_url:
+            raise CollectorError(f"{job.code} 使用 download_center 模式但没有配置 download_center_url。")
+        await page.goto(job.download_center_url, wait_until="domcontentloaded")
 
     try:
         async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
@@ -83,3 +88,25 @@ async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path
     target = downloads_dir / f"{datetime.now():%Y%m%d_%H%M%S}_{suggested}"
     await download.save_as(str(target))
     return target
+
+
+async def _run_step(page, step: BrowserStep) -> None:
+    if step.action == "goto":
+        if not step.url:
+            raise CollectorError("goto step 缺少 url")
+        await page.goto(step.url, wait_until="domcontentloaded")
+        return
+    if step.action == "click":
+        if not step.selector:
+            raise CollectorError("click step 缺少 selector")
+        await page.locator(step.selector).click()
+        return
+    if step.action == "fill":
+        if not step.selector:
+            raise CollectorError("fill step 缺少 selector")
+        await page.locator(step.selector).fill(step.value or "")
+        return
+    if step.action == "wait":
+        await page.wait_for_timeout((step.seconds or 1) * 1000)
+        return
+    raise CollectorError(f"不支持的 step action：{step.action}")

@@ -21,6 +21,15 @@ class Settings:
 
 
 @dataclass(frozen=True)
+class BrowserStep:
+    action: str
+    selector: str | None = None
+    value: str | None = None
+    url: str | None = None
+    seconds: int | None = None
+
+
+@dataclass(frozen=True)
 class CollectorJob:
     code: str
     enabled: bool
@@ -28,9 +37,10 @@ class CollectorJob:
     schedule_cron: str
     state_file: str
     report_page_url: str
-    trigger_selector: str
-    download_center_url: str
     download_selector: str
+    download_mode: str = "direct"
+    steps: list[BrowserStep] | None = None
+    download_center_url: str | None = None
     date_field: str | None = None
     store_code_field: str | None = None
     store_name_field: str | None = None
@@ -57,4 +67,9 @@ def load_jobs(path: Path) -> list[CollectorJob]:
         return []
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw_jobs: list[dict[str, Any]] = payload.get("jobs", [])
-    return [CollectorJob(**job) for job in raw_jobs]
+    jobs: list[CollectorJob] = []
+    for raw_job in raw_jobs:
+        raw_steps = raw_job.pop("steps", None) or []
+        steps = [BrowserStep(**step) for step in raw_steps]
+        jobs.append(CollectorJob(**raw_job, steps=steps))
+    return jobs
