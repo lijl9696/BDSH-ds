@@ -6,6 +6,7 @@ from pathlib import Path
 from time import monotonic
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from .config import BrowserStep, CollectorJob, Settings
@@ -135,7 +136,7 @@ async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path
     try:
         async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
             locator = await _find_locator(page, job.download_selector)
-            await locator.click()
+            await _click_locator(page, locator)
         download = await download_info.value
     except PlaywrightTimeoutError as exc:
         raise CollectorError(f"{job.code} 下载超时，请检查下载中心选择器或登录态。") from exc
@@ -156,7 +157,7 @@ async def _run_step(page, step: BrowserStep) -> None:
         if not step.selector:
             raise CollectorError("click step 缺少 selector")
         locator = await _find_locator(page, step.selector)
-        await locator.click()
+        await _click_locator(page, locator)
         return
     if step.action == "fill":
         if not step.selector:
@@ -168,6 +169,49 @@ async def _run_step(page, step: BrowserStep) -> None:
         await page.wait_for_timeout((step.seconds or 1) * 1000)
         return
     raise CollectorError(f"不支持的 step action：{step.action}")
+
+
+async def _click_locator(page, locator) -> None:
+    await _clear_blocking_overlays(page)
+    try:
+        await locator.click()
+    except PlaywrightError:
+        await _clear_blocking_overlays(page)
+        await locator.click(force=True)
+
+
+async def _clear_blocking_overlays(page) -> None:
+    script = """
+    () => {
+      const selectors = [
+        '.driver-overlay',
+        '.driver-overlay-animated',
+        '.driver-popover',
+        '.driver-popover-wrapper',
+        '.driver-stage',
+        '.driver-highlighted-element'
+      ];
+      for (const selector of selectors) {
+        for (const element of document.querySelectorAll(selector)) {
+          element.remove();
+        }
+      }
+      for (const element of document.querySelectorAll('[class*="driver-"]')) {
+        if (element.tagName === 'SVG') {
+          element.remove();
+        }
+      }
+    }
+    """
+    try:
+        await page.evaluate(script)
+    except Exception:
+        pass
+    for frame in page.frames:
+        try:
+            await frame.evaluate(script)
+        except Exception:
+            continue
 
 
 async def _find_locator(page, selector: str, timeout_ms: int = 30000):

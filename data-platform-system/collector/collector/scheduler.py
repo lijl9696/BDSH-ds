@@ -41,7 +41,7 @@ def _run_job_sync(job: CollectorJob, settings) -> None:
         result = asyncio.run(run_job(job, settings))
     except Exception:
         logging.exception("采集任务失败 %s", job.code)
-        return
+        raise
     logging.info("采集任务完成 %s result=%s", job.code, result)
 
 
