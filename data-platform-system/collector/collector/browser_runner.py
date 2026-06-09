@@ -55,6 +55,9 @@ async def download_job(job: CollectorJob, settings: Settings) -> Path:
         page = await context.new_page()
         try:
             downloaded = await _download_report(page, job, settings.downloads_dir)
+        except Exception:
+            await _save_debug_artifacts(page, job, settings.logs_dir)
+            raise
         finally:
             if settings.browser_cdp_url:
                 await page.close()
@@ -159,6 +162,12 @@ async def _run_step(page, step: BrowserStep) -> None:
         locator = await _find_locator(page, step.selector)
         await _click_locator(page, locator)
         return
+    if step.action == "js_click":
+        if not step.selector:
+            raise CollectorError("js_click step 缺少 selector")
+        locator = await _find_locator(page, step.selector)
+        await _js_click_locator(page, locator)
+        return
     if step.action == "fill":
         if not step.selector:
             raise CollectorError("fill step 缺少 selector")
@@ -178,6 +187,11 @@ async def _click_locator(page, locator) -> None:
     except PlaywrightError:
         await _clear_blocking_overlays(page)
         await locator.click(force=True)
+
+
+async def _js_click_locator(page, locator) -> None:
+    await _clear_blocking_overlays(page)
+    await locator.evaluate("(element) => element.click()")
 
 
 async def _clear_blocking_overlays(page) -> None:
@@ -235,3 +249,52 @@ async def _find_locator(page, selector: str, timeout_ms: int = 30000):
 
         await page.wait_for_timeout(500)
     raise CollectorError(f"找不到页面元素：{selector}")
+
+
+async def _save_debug_artifacts(page, job: CollectorJob, logs_dir: Path) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = logs_dir / f"{stamp}_{job.code}_debug"
+    try:
+        await page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+    except Exception:
+        pass
+    lines: list[str] = []
+    try:
+        lines.append(f"page_title={await page.title()}")
+        lines.append(f"page_url={page.url}")
+    except Exception:
+        pass
+    for index, frame in enumerate(page.frames):
+        lines.append(f"\n--- frame {index} {frame.url} ---")
+        try:
+            body_text = await frame.locator("body").inner_text(timeout=2000)
+            lines.append(body_text[:5000])
+        except Exception as exc:
+            lines.append(f"<body failed: {type(exc).__name__}: {exc}>")
+        for selector in [
+            "button",
+            "input",
+            ".download-modal",
+            ".mtd-picker-panel-shortcut",
+            "[class*='driver']",
+        ]:
+            try:
+                payload = await frame.locator(selector).evaluate_all(
+                    """elements => elements.slice(0, 30).map((element, index) => ({
+                      index,
+                      tag: element.tagName,
+                      className: element.className,
+                      text: (element.innerText || '').slice(0, 300),
+                      placeholder: element.getAttribute('placeholder'),
+                      dataClickBid: element.getAttribute('data-click-bid'),
+                      outerHTML: element.outerHTML.slice(0, 500)
+                    }))"""
+                )
+            except Exception as exc:
+                payload = f"<selector failed: {type(exc).__name__}: {exc}>"
+            lines.append(f"\nselector={selector}\n{payload}")
+    try:
+        base.with_suffix(".txt").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass

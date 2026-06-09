@@ -7,14 +7,14 @@ jobs:
     report_page_url: "https://e.dianping.com/app/merchant-platform/0fb1bec0bade47d?iUrl=Ly9oNS5kaWFucGluZy5jb20vdmctcGMtYWR2aWNlL3JlcG9ydC1jZW50ZXIvaW5kZXguaHRtbA"
     download_mode: direct
     steps:
-      - action: click
+      - action: js_click
         selector: "button[data-click-bid='b_cbg_x7daorvu_mc']:has-text('使用模板')"
       - action: wait
         seconds: 2
       - action: click
-        selector: "input[placeholder='请选择时间范围']"
+        selector: ".download-modal input[placeholder='请选择时间范围']"
       - action: click
-        selector: "text=昨天"
+        selector: ".mtd-picker-panel-shortcut:has-text('昨天')"
       - action: wait
         seconds: 4
     download_selector: "button[data-click-bid='b_cbg_o9nfc94x_mc']:has-text('下载')"
