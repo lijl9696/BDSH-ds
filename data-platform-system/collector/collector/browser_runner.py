@@ -203,17 +203,22 @@ async def _clear_blocking_overlays(page) -> None:
         '.driver-popover',
         '.driver-popover-wrapper',
         '.driver-stage',
-        '.driver-highlighted-element'
+        '.driver-highlighted-element',
+        '#guide-notification-modal',
+        '.mtd-notification[aria-controls="driver-popover-content"]'
       ];
       for (const selector of selectors) {
         for (const element of document.querySelectorAll(selector)) {
           element.remove();
         }
       }
-      for (const element of document.querySelectorAll('[class*="driver-"]')) {
-        if (element.tagName === 'SVG') {
+      document.body?.classList.remove('driver-active', 'driver-fade');
+      for (const element of document.querySelectorAll('[class*="driver"]')) {
+        if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
           element.remove();
+          continue;
         }
+        element.classList.remove('driver-active-element', 'driver-no-interaction', 'driver-highlighted-element');
       }
     }
     """

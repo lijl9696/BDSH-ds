@@ -12,7 +12,9 @@ jobs:
       - action: wait
         seconds: 2
       - action: click
-        selector: ".download-modal input[placeholder='请选择时间范围']"
+        selector: ".download-modal .mtd-date-picker-editor"
+      - action: wait
+        seconds: 1
       - action: click
         selector: ".mtd-picker-panel-shortcut:has-text('昨天')"
       - action: wait
