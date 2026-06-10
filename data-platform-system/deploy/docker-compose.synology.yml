@@ -59,6 +59,7 @@ services:
       COLLECTOR_STATE_DIR: /app/state
       COLLECTOR_LOGS_DIR: /app/logs
       COLLECTOR_HEADLESS: "true"
+      COLLECTOR_TIMEZONE: Asia/Shanghai
       TZ: Asia/Shanghai
     volumes:
       - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/collector/downloads:/app/downloads

@@ -253,6 +253,45 @@ tail -n 100 /volume1/docker/tg-report/collector/logs/collector.log
 docker exec -it tg-report-collector python -m collector.cli run meituan_daily
 ```
 
+只下载不入库，用来排查页面选择和下载逻辑：
+
+```bash
+docker exec -it tg-report-collector python -m collector.cli download meituan_daily
+```
+
+如果要检查当天早上自动任务是否真的成功，按这个顺序看：
+
+```bash
+grep -n "开始采集任务\|采集任务完成\|采集任务失败" /volume1/docker/tg-report/collector/logs/collector.log
+ls -lh /volume1/docker/tg-report/collector/downloads | tail
+docker exec -it tg-report-postgres psql -U tg_report -d tg_report -c "
+SELECT metric_date, COUNT(*)
+FROM metric_values
+WHERE platform_code = 'meituan'
+  AND metric_date >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY metric_date
+ORDER BY metric_date DESC;
+"
+```
+
+判断方式：
+
+```text
+日志没有开始采集任务：collector 调度没有运行，检查容器和 jobs.yml。
+日志失败：看失败行后面的 traceback，通常是登录态失效或页面元素变化。
+有下载文件但 metric_values 没有对应日期：下载成功，入库或日期选择有问题。
+metric_values 有对应日期但 Metabase 空：优先检查 Metabase 筛选器绑定和 SQL。
+```
+
+collector 必须使用上海时区。`docker-compose.synology.yml` 已设置：
+
+```text
+TZ=Asia/Shanghai
+COLLECTOR_TIMEZONE=Asia/Shanghai
+```
+
+这两个都不要删。否则页面里的“昨天”可能按 UTC 计算，在早上 8 点前会选到前一天的数据。
+
 第一次登录态可以在有图形界面的机器生成，也可以后续单独做远程登录流程。登录态文件放在：
 
 ```text

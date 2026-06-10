@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic
+from zoneinfo import ZoneInfo
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import Error as PlaywrightError
@@ -25,12 +26,12 @@ async def run_job(job: CollectorJob, settings: Settings) -> dict:
         settings.import_auth_username,
         settings.import_auth_password,
     )
-    today = date.today()
+    target_date = datetime.now(ZoneInfo(settings.timezone)).date() - timedelta(days=1)
     return client.import_file(
         platform_code=job.platform_code,
         file_path=downloaded,
-        period_start=today,
-        period_end=today,
+        period_start=target_date,
+        period_end=target_date,
         duplicate_policy=job.duplicate_policy,
         date_field=job.date_field,
         store_code_field=job.store_code_field,
@@ -104,7 +105,10 @@ async def _new_browser_context(
         browser = await playwright.chromium.connect_over_cdp(settings.browser_cdp_url)
         if browser.contexts:
             return browser.contexts[0]
-        return await browser.new_context(accept_downloads=accept_downloads)
+        return await browser.new_context(
+            accept_downloads=accept_downloads,
+            timezone_id=settings.timezone,
+        )
 
     if settings.browser_user_data_dir:
         settings.browser_user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +117,7 @@ async def _new_browser_context(
             headless=headless,
             channel=settings.browser_channel,
             accept_downloads=accept_downloads,
+            timezone_id=settings.timezone,
         )
 
     browser = await playwright.chromium.launch(
@@ -122,6 +127,7 @@ async def _new_browser_context(
     return await browser.new_context(
         accept_downloads=accept_downloads,
         storage_state=str(storage_state) if storage_state else None,
+        timezone_id=settings.timezone,
     )
 
 

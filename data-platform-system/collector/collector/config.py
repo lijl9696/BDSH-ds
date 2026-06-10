@@ -21,6 +21,7 @@ class Settings:
     browser_channel: str | None
     browser_user_data_dir: Path | None
     browser_cdp_url: str | None
+    timezone: str
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ def load_settings() -> Settings:
             else None
         ),
         browser_cdp_url=os.getenv("COLLECTOR_BROWSER_CDP_URL") or None,
+        timezone=os.getenv("COLLECTOR_TIMEZONE", "Asia/Shanghai"),
     )
 
 
