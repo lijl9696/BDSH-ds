@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import Error as PlaywrightError
@@ -26,7 +26,7 @@ async def run_job(job: CollectorJob, settings: Settings) -> dict:
         settings.import_auth_username,
         settings.import_auth_password,
     )
-    target_date = datetime.now(ZoneInfo(settings.timezone)).date() - timedelta(days=1)
+    target_date = datetime.now(_python_timezone(settings.timezone)).date() - timedelta(days=1)
     return client.import_file(
         platform_code=job.platform_code,
         file_path=downloaded,
@@ -129,6 +129,15 @@ async def _new_browser_context(
         storage_state=str(storage_state) if storage_state else None,
         timezone_id=settings.timezone,
     )
+
+
+def _python_timezone(timezone_name: str):
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        if timezone_name == "Asia/Shanghai":
+            return timezone(timedelta(hours=8))
+        raise
 
 
 async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path:
