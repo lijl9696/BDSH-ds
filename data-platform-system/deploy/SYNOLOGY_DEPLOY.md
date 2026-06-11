@@ -279,6 +279,7 @@ ORDER BY metric_date DESC;
 ```text
 日志没有开始采集任务：collector 调度没有运行，检查容器和 jobs.yml。
 日志失败：看失败行后面的 traceback，通常是登录态失效或页面元素变化。
+日志出现 Run time of job ... was missed：collector 当时启动或调度晚到，任务被 APScheduler 判定为错过。新版 collector 已设置 10 分钟宽限，1-2 秒抖动不会再吞掉当天任务。
 有下载文件但 metric_values 没有对应日期：下载成功，入库或日期选择有问题。
 metric_values 有对应日期但 Metabase 空：优先检查 Metabase 筛选器绑定和 SQL。
 ```

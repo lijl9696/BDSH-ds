@@ -20,15 +20,21 @@ def main() -> None:
     if not jobs:
         logging.warning("没有启用的采集任务，检查 %s", settings.jobs_path)
 
-    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
+    scheduler = BlockingScheduler(
+        timezone=settings.timezone,
+        job_defaults={
+            "coalesce": True,
+            "misfire_grace_time": 600,
+            "max_instances": 1,
+        },
+    )
     for job in jobs:
         scheduler.add_job(
             _run_job_sync,
-            CronTrigger.from_crontab(job.schedule_cron, timezone="Asia/Shanghai"),
+            CronTrigger.from_crontab(job.schedule_cron, timezone=settings.timezone),
             args=[job, settings],
             id=job.code,
             replace_existing=True,
-            max_instances=1,
         )
         logging.info("已注册采集任务 %s cron=%s", job.code, job.schedule_cron)
 
