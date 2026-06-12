@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
@@ -19,14 +21,14 @@ class CollectorError(RuntimeError):
 
 
 async def run_job(job: CollectorJob, settings: Settings) -> dict:
-    downloaded = await download_job(job, settings)
+    target_date = _target_date(settings)
+    downloaded = await _download_expected_file(job, settings, target_date)
 
     client = ReportWebClient(
         settings.report_web_base_url,
         settings.import_auth_username,
         settings.import_auth_password,
     )
-    target_date = datetime.now(_python_timezone(settings.timezone)).date() - timedelta(days=1)
     return client.import_file(
         platform_code=job.platform_code,
         file_path=downloaded,
@@ -39,7 +41,46 @@ async def run_job(job: CollectorJob, settings: Settings) -> dict:
     )
 
 
-async def download_job(job: CollectorJob, settings: Settings) -> Path:
+async def _download_expected_file(job: CollectorJob, settings: Settings, target_date) -> Path:
+    attempts = max(1, job.download_retry_attempts)
+    for attempt in range(1, attempts + 1):
+        downloaded = await download_job(
+            job,
+            settings,
+            target_date=target_date,
+            use_direct_date=attempt > 1,
+        )
+        file_date_range = _date_range_from_filename(downloaded.name)
+        if not file_date_range:
+            return downloaded
+        start_date, end_date = file_date_range
+        if start_date == target_date and end_date == target_date:
+            return downloaded
+        if attempt >= attempts:
+            raise CollectorError(
+                f"{job.code} 下载文件日期不匹配：期望 {target_date:%Y%m%d}-{target_date:%Y%m%d}，"
+                f"实际文件 {downloaded.name}。"
+            )
+        logging.warning(
+            "%s 下载文件日期不匹配，等待后重试 attempt=%s/%s expected=%s actual=%s file=%s",
+            job.code,
+            attempt,
+            attempts,
+            f"{target_date:%Y%m%d}-{target_date:%Y%m%d}",
+            f"{start_date:%Y%m%d}-{end_date:%Y%m%d}",
+            downloaded.name,
+        )
+        await asyncio.sleep(max(1, job.download_retry_delay_seconds))
+    raise CollectorError(f"{job.code} 下载重试结束但没有得到目标日期文件。")
+
+
+async def download_job(
+    job: CollectorJob,
+    settings: Settings,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+) -> Path:
     settings.downloads_dir.mkdir(parents=True, exist_ok=True)
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     state_path = settings.state_dir / job.state_file
@@ -55,7 +96,13 @@ async def download_job(job: CollectorJob, settings: Settings) -> Path:
         )
         page = await context.new_page()
         try:
-            downloaded = await _download_report(page, job, settings.downloads_dir)
+            downloaded = await _download_report(
+                page,
+                job,
+                settings.downloads_dir,
+                target_date=target_date,
+                use_direct_date=use_direct_date,
+            )
         except Exception:
             await _save_debug_artifacts(page, job, settings.logs_dir)
             raise
@@ -140,10 +187,30 @@ def _python_timezone(timezone_name: str):
         raise
 
 
-async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path:
+def _target_date(settings: Settings):
+    return datetime.now(_python_timezone(settings.timezone)).date() - timedelta(days=1)
+
+
+def _date_range_from_filename(filename: str):
+    match = re.search(r"-(\d{8})-(\d{8})(?:-|\.|$)", filename)
+    if not match:
+        return None
+    start = datetime.strptime(match.group(1), "%Y%m%d").date()
+    end = datetime.strptime(match.group(2), "%Y%m%d").date()
+    return start, end
+
+
+async def _download_report(
+    page,
+    job: CollectorJob,
+    downloads_dir: Path,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+) -> Path:
     await page.goto(job.report_page_url, wait_until="domcontentloaded")
     for step in job.steps or []:
-        await _run_step(page, step)
+        await _run_step(page, step, target_date=target_date, use_direct_date=use_direct_date)
     if job.wait_after_trigger_seconds > 0:
         await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
     if job.download_mode == "download_center":
@@ -165,7 +232,7 @@ async def _download_report(page, job: CollectorJob, downloads_dir: Path) -> Path
     return target
 
 
-async def _run_step(page, step: BrowserStep) -> None:
+async def _run_step(page, step: BrowserStep, *, target_date=None, use_direct_date: bool = False) -> None:
     if step.action == "goto":
         if not step.url:
             raise CollectorError("goto step 缺少 url")
@@ -174,8 +241,16 @@ async def _run_step(page, step: BrowserStep) -> None:
     if step.action == "click":
         if not step.selector:
             raise CollectorError("click step 缺少 selector")
+        if use_direct_date and target_date and "昨天" in step.selector:
+            await _click_target_date_range(page, target_date)
+            return
         locator = await _find_locator(page, step.selector)
         await _click_locator(page, locator)
+        return
+    if step.action == "click_target_date_range":
+        if not target_date:
+            raise CollectorError("click_target_date_range 缺少 target_date")
+        await _click_target_date_range(page, target_date)
         return
     if step.action == "js_click":
         if not step.selector:
@@ -207,6 +282,53 @@ async def _click_locator(page, locator) -> None:
 async def _js_click_locator(page, locator) -> None:
     await _clear_blocking_overlays(page)
     await locator.evaluate("(element) => element.click()")
+
+
+async def _click_target_date_range(page, target_date) -> None:
+    await _clear_blocking_overlays(page)
+    for _ in range(2):
+        clicked = await page.evaluate(
+            """
+            ({ year, month, day }) => {
+              const isVisible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0;
+              };
+              const isDisabled = (element) => {
+                for (let node = element; node && node !== document.body; node = node.parentElement) {
+                  const className = String(node.className || '');
+                  if (className.includes('disabled') || className.includes('forbidden')) {
+                    return true;
+                  }
+                }
+                return false;
+              };
+              const headerText = `${year}年 ${month}月`;
+              const panelRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
+                .filter((root) => root.innerText.includes(headerText));
+              const roots = panelRoots.length ? panelRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, body'));
+              for (const root of roots) {
+                const candidates = Array.from(root.querySelectorAll('td, div, span'))
+                  .filter((element) => element.innerText && element.innerText.trim() === String(day))
+                  .filter((element) => isVisible(element) && !isDisabled(element));
+                for (const element of candidates) {
+                  const clickable = element.closest('td, [class*="date-picker-cell"]') || element;
+                  clickable.click();
+                  return true;
+                }
+              }
+              return false;
+            }
+            """,
+            {"year": target_date.year, "month": target_date.month, "day": target_date.day},
+        )
+        if not clicked:
+            raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
+        await page.wait_for_timeout(500)
 
 
 async def _clear_blocking_overlays(page) -> None:

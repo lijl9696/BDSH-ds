@@ -51,6 +51,8 @@ class CollectorJob:
     duplicate_policy: str = "skip"
     wait_after_trigger_seconds: int = 5
     download_timeout_seconds: int = 600
+    download_retry_attempts: int = 6
+    download_retry_delay_seconds: int = 600
 
 
 def load_settings() -> Settings:

@@ -2,7 +2,7 @@ jobs:
   - code: meituan_daily
     enabled: false
     platform_code: meituan
-    schedule_cron: "30 6 * * *"
+    schedule_cron: "30 8 * * *"
     state_file: meituan_state.json
     report_page_url: "https://e.dianping.com/app/merchant-platform/0fb1bec0bade47d?iUrl=Ly9oNS5kaWFucGluZy5jb20vdmctcGMtYWR2aWNlL3JlcG9ydC1jZW50ZXIvaW5kZXguaHRtbA"
     download_mode: direct
@@ -23,6 +23,8 @@ jobs:
     duplicate_policy: skip
     wait_after_trigger_seconds: 2
     download_timeout_seconds: 600
+    download_retry_attempts: 6
+    download_retry_delay_seconds: 600
 
   - code: douyin_daily
     enabled: false
