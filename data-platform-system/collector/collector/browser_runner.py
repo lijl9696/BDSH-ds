@@ -376,6 +376,12 @@ async def _run_step(
             raise CollectorError("click_target_date_range 缺少 target_date")
         await _click_target_date_range(page, target_date)
         return
+    if step.action == "click_all_enabled_checkboxes":
+        await _click_all_enabled_checkboxes(page)
+        return
+    if step.action == "click_all_by_text":
+        await _click_all_by_text(page, value or "全选")
+        return
     if step.action == "js_click":
         if not selector:
             raise CollectorError("js_click step 缺少 selector")
@@ -441,6 +447,8 @@ async def _click_form_control_by_label(page, label_text: str) -> None:
 
 async def _click_target_date_range(page, target_date) -> None:
     await _clear_blocking_overlays(page)
+    if await _confirm_target_date_if_selected(page, target_date):
+        return
     for _ in range(2):
         clicked = await page.evaluate(
             """
@@ -488,6 +496,87 @@ async def _click_target_date_range(page, target_date) -> None:
         if not clicked:
             raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
         await page.wait_for_timeout(500)
+    await _click_visible_button_text(page, "确认", required=False)
+
+
+async def _confirm_target_date_if_selected(page, target_date) -> bool:
+    expected = f"{target_date:%Y-%m-%d} ～ {target_date:%Y-%m-%d}"
+    selected = await page.evaluate(
+        """
+        (expected) => Array.from(document.querySelectorAll('input'))
+          .some((input) => String(input.value || '').trim() === expected)
+        """,
+        expected,
+    )
+    if selected:
+        await _click_visible_button_text(page, "确认", required=False)
+        return True
+    return False
+
+
+async def _click_visible_button_text(page, text: str, *, required: bool = True) -> bool:
+    locator = page.locator(f"button:has-text('{text}')")
+    try:
+        count = await locator.count()
+    except Exception:
+        count = 0
+    if count == 0:
+        if required:
+            raise CollectorError(f"找不到按钮：{text}")
+        return False
+    for index in range(count - 1, -1, -1):
+        button = locator.nth(index)
+        try:
+            if await button.is_visible() and await button.is_enabled():
+                await _click_locator(page, button)
+                await page.wait_for_timeout(500)
+                return True
+        except Exception:
+            continue
+    if required:
+        raise CollectorError(f"找不到按钮：{text}")
+    return False
+
+
+async def _click_all_enabled_checkboxes(page) -> None:
+    await _clear_blocking_overlays(page)
+    clicked = await page.evaluate(
+        """
+        () => {
+          let clickedCount = 0;
+          const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+            .filter((input) => !input.disabled && !input.checked);
+          for (const input of checkboxes) {
+            const clickable = input.closest('label, [class*="checkbox"], [class*="check"]') || input.parentElement || input;
+            clickable.click();
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            clickedCount += 1;
+          }
+          return clickedCount;
+        }
+        """
+    )
+    logging.info("点击未选中的可用复选框 count=%s", clicked)
+    await page.wait_for_timeout(1000)
+
+
+async def _click_all_by_text(page, text: str) -> None:
+    await _clear_blocking_overlays(page)
+    locator = page.get_by_text(text, exact=True)
+    count = await locator.count()
+    clicked = 0
+    for index in range(count):
+        item = locator.nth(index)
+        try:
+            if await item.is_visible():
+                await item.click()
+                clicked += 1
+                await page.wait_for_timeout(300)
+        except Exception:
+            continue
+    logging.info("点击文本 count=%s text=%s", clicked, text)
+    await page.wait_for_timeout(1000)
 
 
 async def _clear_blocking_overlays(page) -> None:

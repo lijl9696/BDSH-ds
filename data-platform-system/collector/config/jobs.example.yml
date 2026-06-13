@@ -46,6 +46,10 @@ jobs:
       - action: click_target_date_range
       - action: wait
         seconds: 2
+      - action: click_all_by_text
+        value: "全选"
+      - action: wait
+        seconds: 2
       - action: click
         selector: "button:has-text('创建下载任务')"
       - action: fill

@@ -185,6 +185,30 @@ field_mappings:
     metric_code: intent_user_count
     data_type: number
   - platform_code: douyin
+    source_field: 门店页成交后退款金额
+    metric_code: paid_refund_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店页成交后退款券数
+    metric_code: paid_refund_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店页成交后退款人数
+    metric_code: paid_refund_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款金额
+    metric_code: intent_refund_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款券数
+    metric_code: intent_refund_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款人数
+    metric_code: intent_refund_user_count
+    data_type: number
+  - platform_code: douyin
     source_field: 核销金额
     metric_code: verified_amount
     data_type: number
@@ -199,6 +223,10 @@ field_mappings:
   - platform_code: douyin
     source_field: 核销新客人数
     metric_code: verified_new_customer_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店核销老客数
+    metric_code: verified_old_customer_count
     data_type: number
   - platform_code: douyin
     source_field: 新发布门店关联视频数
@@ -239,4 +267,28 @@ field_mappings:
   - platform_code: douyin
     source_field: 评价回复率
     metric_code: review_reply_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险投诉率
+    metric_code: business_risk_complaint_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险差评率
+    metric_code: business_risk_bad_review_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险商责退单率
+    metric_code: business_risk_merchant_refund_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店点亮数
+    metric_code: store_light_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 点亮后的投稿数
+    metric_code: post_after_light_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店收藏数
+    metric_code: store_favorite_count
     data_type: number

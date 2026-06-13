@@ -74,6 +74,7 @@ platforms:
     name: 抖音
     header_scan_rows: 3
     date_fields:
+      - 天
       - 周
       - 日期
       - 统计日期
