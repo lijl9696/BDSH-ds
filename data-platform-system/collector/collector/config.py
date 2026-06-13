@@ -45,6 +45,16 @@ class CollectorJob:
     download_mode: str = "direct"
     steps: list[BrowserStep] | None = None
     download_center_url: str | None = None
+    task_name_template: str | None = None
+    task_refresh_selector: str | None = None
+    task_row_selector: str | None = None
+    task_name_selector: str | None = None
+    task_status_selector: str | None = None
+    task_download_selector: str | None = None
+    task_done_text: str = "已完成"
+    task_failed_text: str = "失败"
+    task_poll_interval_seconds: int = 30
+    task_timeout_seconds: int = 900
     date_field: str | None = None
     store_code_field: str | None = None
     store_name_field: str | None = None

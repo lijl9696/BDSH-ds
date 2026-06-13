@@ -86,6 +86,9 @@ async def download_job(
     state_path = settings.state_dir / job.state_file
     if not state_path.exists() and not settings.browser_user_data_dir and not settings.browser_cdp_url:
         raise CollectorError(f"登录态不存在：{state_path}。请先执行 login 命令保存登录态。")
+    if target_date is None:
+        target_date = _target_date(settings)
+    run_context = _build_run_context(job, target_date)
 
     async with async_playwright() as playwright:
         context = await _new_browser_context(
@@ -102,6 +105,7 @@ async def download_job(
                 settings.downloads_dir,
                 target_date=target_date,
                 use_direct_date=use_direct_date,
+                run_context=run_context,
             )
         except Exception:
             await _save_debug_artifacts(page, job, settings.logs_dir)
@@ -200,6 +204,28 @@ def _date_range_from_filename(filename: str):
     return start, end
 
 
+def _build_run_context(job: CollectorJob, target_date) -> dict[str, object]:
+    now = datetime.now()
+    default_task_name = f"{job.code}_{target_date:%Y%m%d}_{now:%H%M%S}"
+    task_name = _format_template(
+        job.task_name_template or default_task_name,
+        {"target_date": target_date, "now": now, "job_code": job.code},
+    )
+    return {
+        "job_code": job.code,
+        "now": now,
+        "target_date": target_date,
+        "target_date_yyyymmdd": f"{target_date:%Y%m%d}",
+        "task_name": task_name,
+    }
+
+
+def _format_template(template: str | None, context: dict[str, object]) -> str | None:
+    if template is None:
+        return None
+    return template.format(**context)
+
+
 async def _download_report(
     page,
     job: CollectorJob,
@@ -207,12 +233,21 @@ async def _download_report(
     *,
     target_date=None,
     use_direct_date: bool = False,
+    run_context: dict[str, object] | None = None,
 ) -> Path:
     await page.goto(job.report_page_url, wait_until="domcontentloaded")
     for step in job.steps or []:
-        await _run_step(page, step, target_date=target_date, use_direct_date=use_direct_date)
+        await _run_step(
+            page,
+            step,
+            target_date=target_date,
+            use_direct_date=use_direct_date,
+            run_context=run_context,
+        )
     if job.wait_after_trigger_seconds > 0:
         await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
+    if job.download_mode == "task_center":
+        return await _download_task_center_file(page, job, downloads_dir, run_context or {})
     if job.download_mode == "download_center":
         if not job.download_center_url:
             raise CollectorError(f"{job.code} 使用 download_center 模式但没有配置 download_center_url。")
@@ -232,20 +267,109 @@ async def _download_report(
     return target
 
 
-async def _run_step(page, step: BrowserStep, *, target_date=None, use_direct_date: bool = False) -> None:
+async def _download_task_center_file(
+    page,
+    job: CollectorJob,
+    downloads_dir: Path,
+    run_context: dict[str, object],
+) -> Path:
+    if not job.download_center_url:
+        raise CollectorError(f"{job.code} 使用 task_center 模式但没有配置 download_center_url。")
+    for field_name in [
+        "task_refresh_selector",
+        "task_row_selector",
+        "task_name_selector",
+        "task_status_selector",
+        "task_download_selector",
+    ]:
+        if not getattr(job, field_name):
+            raise CollectorError(f"{job.code} 使用 task_center 模式但没有配置 {field_name}。")
+
+    await page.goto(_format_template(job.download_center_url, run_context), wait_until="domcontentloaded")
+    deadline = monotonic() + job.task_timeout_seconds
+    last_status = "未找到任务"
+    while monotonic() < deadline:
+        row = await _find_task_row(
+            page,
+            job.task_row_selector or "",
+            job.task_name_selector or "",
+            str(run_context.get("task_name") or ""),
+        )
+        if row:
+            try:
+                last_status = (await row.locator(job.task_status_selector or "").inner_text(timeout=2000)).strip()
+            except Exception:
+                last_status = "无法读取状态"
+            if job.task_failed_text and job.task_failed_text in last_status:
+                raise CollectorError(f"{job.code} 下载任务失败：{last_status}")
+            if job.task_done_text in last_status:
+                async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
+                    await _click_locator(page, row.locator(job.task_download_selector or "").first)
+                download = await download_info.value
+                suggested = download.suggested_filename or f"{job.code}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+                target = downloads_dir / f"{datetime.now():%Y%m%d_%H%M%S}_{suggested}"
+                await download.save_as(str(target))
+                return target
+
+        logging.info(
+            "%s 下载任务未完成 task=%s status=%s，等待后刷新。",
+            job.code,
+            run_context.get("task_name"),
+            last_status,
+        )
+        await page.wait_for_timeout(max(1, job.task_poll_interval_seconds) * 1000)
+        refresh = await _find_locator(page, job.task_refresh_selector or "", timeout_ms=5000)
+        await _click_locator(page, refresh)
+        await page.wait_for_timeout(2000)
+    raise CollectorError(f"{job.code} 等待下载任务超时 task={run_context.get('task_name')} last_status={last_status}")
+
+
+async def _find_task_row(page, row_selector: str, name_selector: str, task_name: str):
+    rows = page.locator(row_selector)
+    try:
+        count = await rows.count()
+    except Exception:
+        return None
+    for index in range(count):
+        row = rows.nth(index)
+        try:
+            name = (await row.locator(name_selector).inner_text(timeout=1000)).strip()
+        except Exception:
+            continue
+        if task_name in name:
+            return row
+    return None
+
+
+async def _run_step(
+    page,
+    step: BrowserStep,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+    run_context: dict[str, object] | None = None,
+) -> None:
+    selector = _format_template(step.selector, run_context or {}) if step.selector else None
+    value = _format_template(step.value, run_context or {}) if step.value else None
+    url = _format_template(step.url, run_context or {}) if step.url else None
     if step.action == "goto":
-        if not step.url:
+        if not url:
             raise CollectorError("goto step 缺少 url")
-        await page.goto(step.url, wait_until="domcontentloaded")
+        await page.goto(url, wait_until="domcontentloaded")
         return
     if step.action == "click":
-        if not step.selector:
+        if not selector:
             raise CollectorError("click step 缺少 selector")
-        if use_direct_date and target_date and "昨天" in step.selector:
+        if use_direct_date and target_date and "昨天" in selector:
             await _click_target_date_range(page, target_date)
             return
-        locator = await _find_locator(page, step.selector)
+        locator = await _find_locator(page, selector)
         await _click_locator(page, locator)
+        return
+    if step.action == "click_form_control_by_label":
+        if not value:
+            raise CollectorError("click_form_control_by_label step 缺少 value")
+        await _click_form_control_by_label(page, value)
         return
     if step.action == "click_target_date_range":
         if not target_date:
@@ -253,16 +377,16 @@ async def _run_step(page, step: BrowserStep, *, target_date=None, use_direct_dat
         await _click_target_date_range(page, target_date)
         return
     if step.action == "js_click":
-        if not step.selector:
+        if not selector:
             raise CollectorError("js_click step 缺少 selector")
-        locator = await _find_locator(page, step.selector)
+        locator = await _find_locator(page, selector)
         await _js_click_locator(page, locator)
         return
     if step.action == "fill":
-        if not step.selector:
+        if not selector:
             raise CollectorError("fill step 缺少 selector")
-        locator = await _find_locator(page, step.selector)
-        await locator.fill(step.value or "")
+        locator = await _find_locator(page, selector)
+        await locator.fill(value or "")
         return
     if step.action == "wait":
         await page.wait_for_timeout((step.seconds or 1) * 1000)
@@ -282,6 +406,37 @@ async def _click_locator(page, locator) -> None:
 async def _js_click_locator(page, locator) -> None:
     await _clear_blocking_overlays(page)
     await locator.evaluate("(element) => element.click()")
+
+
+async def _click_form_control_by_label(page, label_text: str) -> None:
+    await _clear_blocking_overlays(page)
+    clicked = await page.evaluate(
+        """
+        (labelText) => {
+          const visible = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const labels = Array.from(document.querySelectorAll('label, .byted-form-container-label, .mtd-form-item-label'))
+            .filter((element) => (element.innerText || '').trim().includes(labelText));
+          for (const label of labels) {
+            const container = label.closest('.byted-form-container, .mtd-form-item, .form-item') || label.parentElement;
+            if (!container) continue;
+            const candidates = Array.from(container.querySelectorAll('input, button, [class*="picker"], [class*="input"]'))
+              .filter((element) => element !== label && visible(element));
+            for (const element of candidates) {
+              element.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """,
+        label_text,
+    )
+    if not clicked:
+        raise CollectorError(f"找不到表单项：{label_text}")
 
 
 async def _click_target_date_range(page, target_date) -> None:
@@ -308,15 +463,19 @@ async def _click_target_date_range(page, target_date) -> None:
                 return false;
               };
               const headerText = `${year}年 ${month}月`;
-              const panelRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
+              const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
                 .filter((root) => root.innerText.includes(headerText));
-              const roots = panelRoots.length ? panelRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, body'));
+              const bytedRoots = Array.from(document.querySelectorAll('.byted-date-view, .byted-date-container, .byted-popover-wrapper'))
+                .filter((root) => root.innerText.includes(`${year}年`) || root.innerText.includes(`${month}月`) || root.innerText.includes(String(day)));
+              const roots = mtdRoots.length
+                ? mtdRoots
+                : (bytedRoots.length ? bytedRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, .byted-date-container, body')));
               for (const root of roots) {
-                const candidates = Array.from(root.querySelectorAll('td, div, span'))
+                const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
                   .filter((element) => element.innerText && element.innerText.trim() === String(day))
                   .filter((element) => isVisible(element) && !isDisabled(element));
                 for (const element of candidates) {
-                  const clickable = element.closest('td, [class*="date-picker-cell"]') || element;
+                  const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
                   clickable.click();
                   return true;
                 }

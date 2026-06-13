@@ -64,6 +64,7 @@ button:has-text("下载")
 | --- | --- |
 | `direct` | 点击下载按钮后浏览器直接下载 Excel，适合美团当前报表中心 |
 | `download_center` | 先触发生成，再进入下载中心点击下载，适合抖音这类分离流程 |
+| `task_center` | 先创建带任务名的下载任务，再到下载列表按任务名轮询状态，完成后下载 |
 
 步骤动作：
 
@@ -73,6 +74,8 @@ button:has-text("下载")
 | `fill` | `selector`、`value` | 输入文本 |
 | `wait` | `seconds` | 等待若干秒 |
 | `goto` | `url` | 跳转页面 |
+| `click_form_control_by_label` | `value` | 按表单标签文字点击对应输入/选择控件 |
+| `click_target_date_range` | 无 | 点击目标日期两次，适合开始日期和结束日期相同的日报 |
 
 美团当前流程是直接下载型：
 
@@ -81,6 +84,24 @@ button:has-text("下载")
 ```
 
 时间范围弹窗的选择器需要后续根据真实 DOM 再细化。
+
+抖音这类下载任务型流程使用 `task_center`：
+
+```yaml
+download_mode: task_center
+task_name_template: "douyin_daily_{target_date:%Y%m%d}_{now:%H%M%S}"
+download_center_url: "下载列表 URL"
+task_refresh_selector: "button:has-text('刷新')"
+task_row_selector: "tr.byted-Table-Row"
+task_name_selector: "td[aria-colindex='1']"
+task_status_selector: "td[aria-colindex='2']"
+task_download_selector: "td[aria-colindex='4'] button:has-text('下载')"
+task_done_text: "已完成"
+task_poll_interval_seconds: 30
+task_timeout_seconds: 900
+```
+
+collector 会用 `task_name_template` 创建唯一任务名，然后在下载列表里只下载同名任务，避免误点旧任务。
 
 ## 手动运行
 

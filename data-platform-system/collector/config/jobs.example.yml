@@ -31,13 +31,41 @@ jobs:
     platform_code: douyin
     schedule_cron: "0 7 * * *"
     state_file: douyin_state.json
-    report_page_url: "https://example.com/douyin/report-page"
-    download_mode: download_center
+    report_page_url: "https://www.life-data.cn/data-bazaar/my/index?groupid=1732422563964928"
+    download_mode: task_center
+    task_name_template: "douyin_daily_{target_date:%Y%m%d}_{now:%H%M%S}"
     steps:
       - action: click
-        selector: "text=生成报表"
-    download_center_url: "https://example.com/douyin/download-center"
-    download_selector: "text=下载"
+        selector: ".byted-tab-bar-item:has-text('门店')"
+      - action: click
+        selector: ".byted-form-container:has-text('汇总方式') .byted-radio-tag:has-text('按日')"
+      - action: click_form_control_by_label
+        value: "统计周期"
+      - action: wait
+        seconds: 1
+      - action: click_target_date_range
+      - action: wait
+        seconds: 2
+      - action: click
+        selector: "button:has-text('创建下载任务')"
+      - action: fill
+        selector: ".byted-modal:has-text('任务命名') input[placeholder='请输入任务名']"
+        value: "{task_name}"
+      - action: click
+        selector: ".byted-modal:has-text('任务命名') .byted-confirm-ok"
+      - action: wait
+        seconds: 2
+    download_center_url: "https://www.life-data.cn/data-bazaar/my/tasks?groupid=1732422563964928"
+    download_selector: "td[aria-colindex='4'] button:has-text('下载')"
+    task_refresh_selector: "button:has-text('刷新')"
+    task_row_selector: "tr.byted-Table-Row"
+    task_name_selector: "td[aria-colindex='1']"
+    task_status_selector: "td[aria-colindex='2']"
+    task_download_selector: "td[aria-colindex='4'] button:has-text('下载')"
+    task_done_text: "已完成"
+    task_failed_text: "失败"
+    task_poll_interval_seconds: 30
+    task_timeout_seconds: 900
     duplicate_policy: skip
     wait_after_trigger_seconds: 10
     download_timeout_seconds: 600
