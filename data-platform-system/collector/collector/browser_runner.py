@@ -1,0 +1,708 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from time import monotonic
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import async_playwright
+
+from .config import BrowserStep, CollectorJob, Settings
+from .import_client import ReportWebClient
+
+
+class CollectorError(RuntimeError):
+    pass
+
+
+async def run_job(job: CollectorJob, settings: Settings) -> dict:
+    target_date = _target_date(settings)
+    downloaded = await _download_expected_file(job, settings, target_date)
+
+    client = ReportWebClient(
+        settings.report_web_base_url,
+        settings.import_auth_username,
+        settings.import_auth_password,
+    )
+    return client.import_file(
+        platform_code=job.platform_code,
+        file_path=downloaded,
+        period_start=target_date,
+        period_end=target_date,
+        duplicate_policy=job.duplicate_policy,
+        date_field=job.date_field,
+        store_code_field=job.store_code_field,
+        store_name_field=job.store_name_field,
+    )
+
+
+async def _download_expected_file(job: CollectorJob, settings: Settings, target_date) -> Path:
+    attempts = max(1, job.download_retry_attempts)
+    for attempt in range(1, attempts + 1):
+        downloaded = await download_job(
+            job,
+            settings,
+            target_date=target_date,
+            use_direct_date=attempt > 1,
+        )
+        file_date_range = _date_range_from_filename(downloaded.name)
+        if not file_date_range:
+            return downloaded
+        start_date, end_date = file_date_range
+        if start_date == target_date and end_date == target_date:
+            return downloaded
+        if attempt >= attempts:
+            raise CollectorError(
+                f"{job.code} 下载文件日期不匹配：期望 {target_date:%Y%m%d}-{target_date:%Y%m%d}，"
+                f"实际文件 {downloaded.name}。"
+            )
+        logging.warning(
+            "%s 下载文件日期不匹配，等待后重试 attempt=%s/%s expected=%s actual=%s file=%s",
+            job.code,
+            attempt,
+            attempts,
+            f"{target_date:%Y%m%d}-{target_date:%Y%m%d}",
+            f"{start_date:%Y%m%d}-{end_date:%Y%m%d}",
+            downloaded.name,
+        )
+        await asyncio.sleep(max(1, job.download_retry_delay_seconds))
+    raise CollectorError(f"{job.code} 下载重试结束但没有得到目标日期文件。")
+
+
+async def download_job(
+    job: CollectorJob,
+    settings: Settings,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+) -> Path:
+    settings.downloads_dir.mkdir(parents=True, exist_ok=True)
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = settings.state_dir / job.state_file
+    if not state_path.exists() and not settings.browser_user_data_dir and not settings.browser_cdp_url:
+        raise CollectorError(f"登录态不存在：{state_path}。请先执行 login 命令保存登录态。")
+    if target_date is None:
+        target_date = _target_date(settings)
+    run_context = _build_run_context(job, target_date)
+
+    async with async_playwright() as playwright:
+        context = await _new_browser_context(
+            playwright,
+            settings,
+            accept_downloads=True,
+            storage_state=state_path if state_path.exists() else None,
+        )
+        page = await context.new_page()
+        try:
+            downloaded = await _download_report(
+                page,
+                job,
+                settings.downloads_dir,
+                target_date=target_date,
+                use_direct_date=use_direct_date,
+                run_context=run_context,
+            )
+        except Exception:
+            await _save_debug_artifacts(page, job, settings.logs_dir)
+            raise
+        finally:
+            if settings.browser_cdp_url:
+                await page.close()
+            else:
+                browser = context.browser
+                await context.close()
+                if browser:
+                    await browser.close()
+    return downloaded
+
+
+async def save_login_state(job: CollectorJob, settings: Settings, login_url: str | None = None) -> Path:
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = settings.state_dir / job.state_file
+    async with async_playwright() as playwright:
+        context = await _new_browser_context(
+            playwright,
+            settings,
+            accept_downloads=True,
+            force_headless=False,
+        )
+        page = await context.new_page()
+        await page.goto(login_url or job.report_page_url)
+        print("请在打开的浏览器里完成登录。登录完成并能访问报表页面后，回到终端按回车保存登录态。")
+        await asyncio.to_thread(input)
+        await context.storage_state(path=str(state_path))
+        browser = context.browser
+        await context.close()
+        if browser:
+            await browser.close()
+    return state_path
+
+
+async def _new_browser_context(
+    playwright,
+    settings: Settings,
+    *,
+    accept_downloads: bool,
+    storage_state: Path | None = None,
+    force_headless: bool | None = None,
+):
+    headless = settings.headless if force_headless is None else force_headless
+    if settings.browser_cdp_url:
+        browser = await playwright.chromium.connect_over_cdp(settings.browser_cdp_url)
+        if browser.contexts:
+            return browser.contexts[0]
+        return await browser.new_context(
+            accept_downloads=accept_downloads,
+            timezone_id=settings.timezone,
+        )
+
+    if settings.browser_user_data_dir:
+        settings.browser_user_data_dir.mkdir(parents=True, exist_ok=True)
+        return await playwright.chromium.launch_persistent_context(
+            str(settings.browser_user_data_dir),
+            headless=headless,
+            channel=settings.browser_channel,
+            accept_downloads=accept_downloads,
+            timezone_id=settings.timezone,
+        )
+
+    browser = await playwright.chromium.launch(
+        headless=headless,
+        channel=settings.browser_channel,
+    )
+    return await browser.new_context(
+        accept_downloads=accept_downloads,
+        storage_state=str(storage_state) if storage_state else None,
+        timezone_id=settings.timezone,
+    )
+
+
+def _python_timezone(timezone_name: str):
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        if timezone_name == "Asia/Shanghai":
+            return timezone(timedelta(hours=8))
+        raise
+
+
+def _target_date(settings: Settings):
+    return datetime.now(_python_timezone(settings.timezone)).date() - timedelta(days=1)
+
+
+def _date_range_from_filename(filename: str):
+    match = re.search(r"-(\d{8})-(\d{8})(?:-|\.|$)", filename)
+    if not match:
+        return None
+    start = datetime.strptime(match.group(1), "%Y%m%d").date()
+    end = datetime.strptime(match.group(2), "%Y%m%d").date()
+    return start, end
+
+
+def _build_run_context(job: CollectorJob, target_date) -> dict[str, object]:
+    now = datetime.now()
+    default_task_name = f"{job.code}_{target_date:%Y%m%d}_{now:%H%M%S}"
+    task_name = _format_template(
+        job.task_name_template or default_task_name,
+        {"target_date": target_date, "now": now, "job_code": job.code},
+    )
+    return {
+        "job_code": job.code,
+        "now": now,
+        "target_date": target_date,
+        "target_date_yyyymmdd": f"{target_date:%Y%m%d}",
+        "task_name": task_name,
+    }
+
+
+def _format_template(template: str | None, context: dict[str, object]) -> str | None:
+    if template is None:
+        return None
+    return template.format(**context)
+
+
+async def _download_report(
+    page,
+    job: CollectorJob,
+    downloads_dir: Path,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+    run_context: dict[str, object] | None = None,
+) -> Path:
+    await page.goto(job.report_page_url, wait_until="domcontentloaded")
+    for step in job.steps or []:
+        await _run_step(
+            page,
+            step,
+            target_date=target_date,
+            use_direct_date=use_direct_date,
+            run_context=run_context,
+        )
+    if job.wait_after_trigger_seconds > 0:
+        await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
+    if job.download_mode == "task_center":
+        return await _download_task_center_file(page, job, downloads_dir, run_context or {})
+    if job.download_mode == "download_center":
+        if not job.download_center_url:
+            raise CollectorError(f"{job.code} 使用 download_center 模式但没有配置 download_center_url。")
+        await page.goto(job.download_center_url, wait_until="domcontentloaded")
+
+    try:
+        async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
+            locator = await _find_locator(page, job.download_selector)
+            await _click_locator(page, locator)
+        download = await download_info.value
+    except PlaywrightTimeoutError as exc:
+        raise CollectorError(f"{job.code} 下载超时，请检查下载中心选择器或登录态。") from exc
+
+    suggested = download.suggested_filename or f"{job.code}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    target = downloads_dir / f"{datetime.now():%Y%m%d_%H%M%S}_{suggested}"
+    await download.save_as(str(target))
+    return target
+
+
+async def _download_task_center_file(
+    page,
+    job: CollectorJob,
+    downloads_dir: Path,
+    run_context: dict[str, object],
+) -> Path:
+    if not job.download_center_url:
+        raise CollectorError(f"{job.code} 使用 task_center 模式但没有配置 download_center_url。")
+    for field_name in [
+        "task_refresh_selector",
+        "task_row_selector",
+        "task_name_selector",
+        "task_status_selector",
+        "task_download_selector",
+    ]:
+        if not getattr(job, field_name):
+            raise CollectorError(f"{job.code} 使用 task_center 模式但没有配置 {field_name}。")
+
+    await page.goto(_format_template(job.download_center_url, run_context), wait_until="domcontentloaded")
+    deadline = monotonic() + job.task_timeout_seconds
+    last_status = "未找到任务"
+    while monotonic() < deadline:
+        row = await _find_task_row(
+            page,
+            job.task_row_selector or "",
+            job.task_name_selector or "",
+            str(run_context.get("task_name") or ""),
+        )
+        if row:
+            try:
+                last_status = (await row.locator(job.task_status_selector or "").inner_text(timeout=2000)).strip()
+            except Exception:
+                last_status = "无法读取状态"
+            if job.task_failed_text and job.task_failed_text in last_status:
+                raise CollectorError(f"{job.code} 下载任务失败：{last_status}")
+            if job.task_done_text in last_status:
+                async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
+                    await _click_locator(page, row.locator(job.task_download_selector or "").first)
+                download = await download_info.value
+                suggested = download.suggested_filename or f"{job.code}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+                target = downloads_dir / f"{datetime.now():%Y%m%d_%H%M%S}_{suggested}"
+                await download.save_as(str(target))
+                return target
+
+        logging.info(
+            "%s 下载任务未完成 task=%s status=%s，等待后刷新。",
+            job.code,
+            run_context.get("task_name"),
+            last_status,
+        )
+        await page.wait_for_timeout(max(1, job.task_poll_interval_seconds) * 1000)
+        refresh = await _find_locator(page, job.task_refresh_selector or "", timeout_ms=5000)
+        await _click_locator(page, refresh)
+        await page.wait_for_timeout(2000)
+    raise CollectorError(f"{job.code} 等待下载任务超时 task={run_context.get('task_name')} last_status={last_status}")
+
+
+async def _find_task_row(page, row_selector: str, name_selector: str, task_name: str):
+    rows = page.locator(row_selector)
+    try:
+        count = await rows.count()
+    except Exception:
+        return None
+    for index in range(count):
+        row = rows.nth(index)
+        try:
+            name = (await row.locator(name_selector).inner_text(timeout=1000)).strip()
+        except Exception:
+            continue
+        if task_name in name:
+            return row
+    return None
+
+
+async def _run_step(
+    page,
+    step: BrowserStep,
+    *,
+    target_date=None,
+    use_direct_date: bool = False,
+    run_context: dict[str, object] | None = None,
+) -> None:
+    selector = _format_template(step.selector, run_context or {}) if step.selector else None
+    value = _format_template(step.value, run_context or {}) if step.value else None
+    url = _format_template(step.url, run_context or {}) if step.url else None
+    if step.action == "goto":
+        if not url:
+            raise CollectorError("goto step 缺少 url")
+        await page.goto(url, wait_until="domcontentloaded")
+        return
+    if step.action == "click":
+        if not selector:
+            raise CollectorError("click step 缺少 selector")
+        if use_direct_date and target_date and "昨天" in selector:
+            await _click_target_date_range(page, target_date)
+            return
+        locator = await _find_locator(page, selector)
+        await _click_locator(page, locator)
+        return
+    if step.action == "click_form_control_by_label":
+        if not value:
+            raise CollectorError("click_form_control_by_label step 缺少 value")
+        await _click_form_control_by_label(page, value)
+        return
+    if step.action == "click_target_date_range":
+        if not target_date:
+            raise CollectorError("click_target_date_range 缺少 target_date")
+        await _click_target_date_range(page, target_date)
+        return
+    if step.action == "click_all_enabled_checkboxes":
+        await _click_all_enabled_checkboxes(page)
+        return
+    if step.action == "click_all_by_text":
+        await _click_all_by_text(page, value or "全选")
+        return
+    if step.action == "js_click":
+        if not selector:
+            raise CollectorError("js_click step 缺少 selector")
+        locator = await _find_locator(page, selector)
+        await _js_click_locator(page, locator)
+        return
+    if step.action == "fill":
+        if not selector:
+            raise CollectorError("fill step 缺少 selector")
+        locator = await _find_locator(page, selector)
+        await locator.fill(value or "")
+        return
+    if step.action == "wait":
+        await page.wait_for_timeout((step.seconds or 1) * 1000)
+        return
+    raise CollectorError(f"不支持的 step action：{step.action}")
+
+
+async def _click_locator(page, locator) -> None:
+    await _clear_blocking_overlays(page)
+    try:
+        await locator.click()
+    except PlaywrightError:
+        await _clear_blocking_overlays(page)
+        await locator.click(force=True)
+
+
+async def _js_click_locator(page, locator) -> None:
+    await _clear_blocking_overlays(page)
+    await locator.evaluate("(element) => element.click()")
+
+
+async def _click_form_control_by_label(page, label_text: str) -> None:
+    await _clear_blocking_overlays(page)
+    clicked = await page.evaluate(
+        """
+        (labelText) => {
+          const visible = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const labels = Array.from(document.querySelectorAll('label, .byted-form-container-label, .mtd-form-item-label'))
+            .filter((element) => (element.innerText || '').trim().includes(labelText));
+          for (const label of labels) {
+            const container = label.closest('.byted-form-container, .mtd-form-item, .form-item') || label.parentElement;
+            if (!container) continue;
+            const candidates = Array.from(container.querySelectorAll('input, button, [class*="picker"], [class*="input"]'))
+              .filter((element) => element !== label && visible(element));
+            for (const element of candidates) {
+              element.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """,
+        label_text,
+    )
+    if not clicked:
+        raise CollectorError(f"找不到表单项：{label_text}")
+
+
+async def _click_target_date_range(page, target_date) -> None:
+    await _clear_blocking_overlays(page)
+    if await _confirm_target_date_if_selected(page, target_date):
+        return
+    for _ in range(2):
+        clicked = await page.evaluate(
+            """
+            ({ year, month, day }) => {
+              const isVisible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0;
+              };
+              const isDisabled = (element) => {
+                for (let node = element; node && node !== document.body; node = node.parentElement) {
+                  const className = String(node.className || '');
+                  if (className.includes('disabled') || className.includes('forbidden')) {
+                    return true;
+                  }
+                }
+                return false;
+              };
+              const headerText = `${year}年 ${month}月`;
+              const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
+                .filter((root) => root.innerText.includes(headerText));
+              const bytedRoots = Array.from(document.querySelectorAll('.byted-date-view, .byted-date-container, .byted-popover-wrapper'))
+                .filter((root) => root.innerText.includes(`${year}年`) || root.innerText.includes(`${month}月`) || root.innerText.includes(String(day)));
+              const roots = mtdRoots.length
+                ? mtdRoots
+                : (bytedRoots.length ? bytedRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, .byted-date-container, body')));
+              for (const root of roots) {
+                const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
+                  .filter((element) => element.innerText && element.innerText.trim() === String(day))
+                  .filter((element) => isVisible(element) && !isDisabled(element));
+                for (const element of candidates) {
+                  const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
+                  clickable.click();
+                  return true;
+                }
+              }
+              return false;
+            }
+            """,
+            {"year": target_date.year, "month": target_date.month, "day": target_date.day},
+        )
+        if not clicked:
+            raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
+        await page.wait_for_timeout(500)
+    await _click_visible_button_text(page, "确认", required=False)
+
+
+async def _confirm_target_date_if_selected(page, target_date) -> bool:
+    expected = f"{target_date:%Y-%m-%d} ～ {target_date:%Y-%m-%d}"
+    selected = await page.evaluate(
+        """
+        (expected) => Array.from(document.querySelectorAll('input'))
+          .some((input) => String(input.value || '').trim() === expected)
+        """,
+        expected,
+    )
+    if selected:
+        await _click_visible_button_text(page, "确认", required=False)
+        return True
+    return False
+
+
+async def _click_visible_button_text(page, text: str, *, required: bool = True) -> bool:
+    locator = page.locator(f"button:has-text('{text}')")
+    try:
+        count = await locator.count()
+    except Exception:
+        count = 0
+    if count == 0:
+        if required:
+            raise CollectorError(f"找不到按钮：{text}")
+        return False
+    for index in range(count - 1, -1, -1):
+        button = locator.nth(index)
+        try:
+            if await button.is_visible() and await button.is_enabled():
+                await _click_locator(page, button)
+                await page.wait_for_timeout(500)
+                return True
+        except Exception:
+            continue
+    if required:
+        raise CollectorError(f"找不到按钮：{text}")
+    return False
+
+
+async def _click_all_enabled_checkboxes(page) -> None:
+    await _clear_blocking_overlays(page)
+    clicked = await page.evaluate(
+        """
+        () => {
+          let clickedCount = 0;
+          const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+            .filter((input) => !input.disabled && !input.checked);
+          for (const input of checkboxes) {
+            const clickable = input.closest('label, [class*="checkbox"], [class*="check"]') || input.parentElement || input;
+            clickable.click();
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            clickedCount += 1;
+          }
+          return clickedCount;
+        }
+        """
+    )
+    logging.info("点击未选中的可用复选框 count=%s", clicked)
+    await page.wait_for_timeout(1000)
+
+
+async def _click_all_by_text(page, text: str) -> None:
+    await _clear_blocking_overlays(page)
+    locator = page.get_by_text(text, exact=True)
+    count = await locator.count()
+    clicked = 0
+    for index in range(count):
+        item = locator.nth(index)
+        try:
+            if await item.is_visible():
+                await item.click()
+                clicked += 1
+                await page.wait_for_timeout(300)
+        except Exception:
+            continue
+    logging.info("点击文本 count=%s text=%s", clicked, text)
+    await page.wait_for_timeout(1000)
+
+
+async def _clear_blocking_overlays(page) -> None:
+    script = """
+    () => {
+      let removed = 0;
+      const selectors = [
+        '.driver-overlay', '.driver-overlay-content',
+        '.driver-overlay-animated',
+        '.driver-popover',
+        '.driver-popover-wrapper',
+        '.driver-stage',
+        '.driver-highlighted-element',
+        '#guide-notification-modal',
+        '.mtd-notification[aria-controls="driver-popover-content"]',
+        '[class*="guide"]',
+        '[class*="guided"]',
+        '.mtd-modal', '.mtd-modal-wrap', '.mtd-mask',
+        '.ant-modal', '.ant-modal-mask', '.ant-modal-wrap',
+        '[class*="modal"]',
+        '.tippy-box',
+        '.popper-wrapper',
+        '.fixed[style*="z-index"]',
+      ];
+      for (const selector of selectors) {
+        for (const element of document.querySelectorAll(selector)) {
+          element.remove(); removed++;
+        }
+      }
+      document.body?.classList.remove('driver-active', 'driver-fade');
+      for (const element of document.querySelectorAll('[class*="driver"]')) {
+        if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
+          element.remove(); removed++;
+        } else {
+          element.classList.remove('driver-active-element', 'driver-no-interaction', 'driver-highlighted-element');
+        }
+      }
+      return removed;
+    }
+    """
+    try:
+        total_removed = 0
+        for _ in range(5):
+            count = await page.evaluate(script)
+            total_removed += count
+            if count == 0:
+                break
+            await page.wait_for_timeout(300)
+        for frame in page.frames:
+            try:
+                fc = await frame.evaluate(script)
+                total_removed += fc
+            except Exception:
+                continue
+        return total_removed
+    except Exception:
+        return 0
+
+
+async def _find_locator(page, selector: str, timeout_ms: int = 30000):
+    deadline = monotonic() + timeout_ms / 1000
+    while monotonic() < deadline:
+        page_locator = page.locator(selector)
+        try:
+            if await page_locator.count() > 0:
+                return page_locator.first
+        except Exception:
+            await page.wait_for_timeout(500)
+            continue
+
+        for frame in page.frames:
+            frame_locator = frame.locator(selector)
+            try:
+                if await frame_locator.count() > 0:
+                    return frame_locator.first
+            except Exception:
+                continue
+
+        await page.wait_for_timeout(500)
+    raise CollectorError(f"找不到页面元素：{selector}")
+
+
+async def _save_debug_artifacts(page, job: CollectorJob, logs_dir: Path) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = logs_dir / f"{stamp}_{job.code}_debug"
+    try:
+        await page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+    except Exception:
+        pass
+    lines: list[str] = []
+    try:
+        lines.append(f"page_title={await page.title()}")
+        lines.append(f"page_url={page.url}")
+    except Exception:
+        pass
+    for index, frame in enumerate(page.frames):
+        lines.append(f"\n--- frame {index} {frame.url} ---")
+        try:
+            body_text = await frame.locator("body").inner_text(timeout=2000)
+            lines.append(body_text[:5000])
+        except Exception as exc:
+            lines.append(f"<body failed: {type(exc).__name__}: {exc}>")
+        for selector in [
+            "button",
+            "input",
+            ".download-modal",
+            ".mtd-picker-panel-shortcut",
+            "[class*='driver']",
+        ]:
+            try:
+                payload = await frame.locator(selector).evaluate_all(
+                    """elements => elements.slice(0, 30).map((element, index) => ({
+                      index,
+                      tag: element.tagName,
+                      className: element.className,
+                      text: (element.innerText || '').slice(0, 300),
+                      placeholder: element.getAttribute('placeholder'),
+                      dataClickBid: element.getAttribute('data-click-bid'),
+                      outerHTML: element.outerHTML.slice(0, 500)
+                    }))"""
+                )
+            except Exception as exc:
+                payload = f"<selector failed: {type(exc).__name__}: {exc}>"
+            lines.append(f"\nselector={selector}\n{payload}")
+    try:
+        base.with_suffix(".txt").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
