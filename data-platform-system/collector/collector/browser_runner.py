@@ -401,12 +401,23 @@ async def _run_step(
 
 
 async def _click_locator(page, locator) -> None:
+    """点击元素前先清理干扰浮层；失败后再次清理并兜底强制点击。
+
+    这里不要一开始就 force click。正常点击可以让 Playwright 帮我们发现
+    “元素被遮挡 / 不可点击 / 未滚动到视口”等问题，只有兜底时才 force。
+    """
     await _clear_blocking_overlays(page)
     try:
-        await locator.click()
+        await locator.scroll_into_view_if_needed(timeout=5000)
+    except Exception:
+        pass
+
+    try:
+        await locator.click(timeout=10000)
     except PlaywrightError:
         await _clear_blocking_overlays(page)
-        await locator.click(force=True)
+        await page.wait_for_timeout(500)
+        await locator.click(force=True, timeout=10000)
 
 
 async def _js_click_locator(page, locator) -> None:
@@ -579,12 +590,91 @@ async def _click_all_by_text(page, text: str) -> None:
     await page.wait_for_timeout(1000)
 
 
-async def _clear_blocking_overlays(page) -> None:
+async def _clear_blocking_overlays(page) -> int:
+    """清理可能遮挡点击的广告/引导浮层。
+
+    设计原则：
+    1. 优先点击关闭按钮，而不是直接删除弹窗 DOM。
+    2. 只删除明确的新手引导/广告/权益类浮层。
+    3. 不再无差别删除 .mtd-modal、.ant-modal、[class*="modal"]，避免误伤日期选择、下载确认等业务弹窗。
+    """
     script = """
     () => {
-      let removed = 0;
-      const selectors = [
-        '.driver-overlay', '.driver-overlay-content',
+      let handled = 0;
+
+      const visible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+
+      const safeText = (element) => String(element.innerText || element.textContent || '').trim();
+
+      const clickElement = (element) => {
+        if (!element || !visible(element)) return false;
+        try {
+          element.click();
+          handled += 1;
+          return true;
+        } catch (_) {
+          return false;
+        }
+      };
+
+      // 1. 先处理常见关闭按钮。这里尽量“点击关闭”，不直接 remove 业务弹窗。
+      const closeSelectors = [
+        '[aria-label="close"]',
+        '[aria-label="Close"]',
+        '[title="关闭"]',
+        '[title="Close"]',
+        '.close',
+        '.close-btn',
+        '.modal-close',
+        '.mtd-modal-close',
+        '.ant-modal-close',
+        '[class*="close"]',
+        '[class*="Close"]'
+      ];
+
+      for (const selector of closeSelectors) {
+        const candidates = Array.from(document.querySelectorAll(selector)).filter(visible);
+        // 从后往前点，通常后出现的弹窗在更上层。
+        for (let i = candidates.length - 1; i >= 0; i--) {
+          if (clickElement(candidates[i])) return handled;
+        }
+      }
+
+      // 2. 按文字找“关闭/跳过/稍后”类按钮。
+      const closeTexts = [
+        '关闭', '知道了', '我知道了', '好的', '确定',
+        '暂不', '暂不开启', '取消', '跳过',
+        '稍后再说', '以后再说', '不再提醒', '我再想想'
+      ];
+
+      const textCandidates = Array.from(document.querySelectorAll('button, a, span, div'))
+        .filter(visible)
+        .filter((element) => {
+          const text = safeText(element);
+          // 太长的容器一般不是按钮，避免点到业务区域。
+          return text && text.length <= 20;
+        });
+
+      for (let i = textCandidates.length - 1; i >= 0; i--) {
+        const element = textCandidates[i];
+        const text = safeText(element);
+        if (closeTexts.some((closeText) => text === closeText || text.includes(closeText))) {
+          if (clickElement(element)) return handled;
+        }
+      }
+
+      // 3. 删除明确的新手引导/driver.js 类浮层。
+      const safeRemoveSelectors = [
+        '.driver-overlay',
+        '.driver-overlay-content',
         '.driver-overlay-animated',
         '.driver-popover',
         '.driver-popover-wrapper',
@@ -592,48 +682,89 @@ async def _clear_blocking_overlays(page) -> None:
         '.driver-highlighted-element',
         '#guide-notification-modal',
         '.mtd-notification[aria-controls="driver-popover-content"]',
-        '[class*="guide"]',
-        '[class*="guided"]',
-        '.mtd-modal', '.mtd-modal-wrap', '.mtd-mask',
-        '.ant-modal', '.ant-modal-mask', '.ant-modal-wrap',
-        '[class*="modal"]',
+        '[aria-controls="driver-popover-content"]'
+      ];
+
+      for (const selector of safeRemoveSelectors) {
+        for (const element of Array.from(document.querySelectorAll(selector))) {
+          try {
+            element.remove();
+            handled += 1;
+          } catch (_) {}
+        }
+      }
+
+      document.body?.classList.remove('driver-active', 'driver-fade');
+      for (const element of Array.from(document.querySelectorAll('[class*="driver"]'))) {
+        try {
+          if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
+            element.remove();
+            handled += 1;
+          } else {
+            element.classList.remove('driver-active-element', 'driver-no-interaction', 'driver-highlighted-element');
+          }
+        } catch (_) {}
+      }
+
+      // 4. 谨慎删除明显广告/权益/新功能类弹窗。
+      // 注意：这里不删除所有 modal，只删除文本命中广告/引导关键词的弹窗容器。
+      const adKeywords = [
+        '广告', '活动', '权益', '升级', '新功能', '新手引导', '引导',
+        '立即体验', '立即开通', '去开通', '限时', '推荐使用',
+        '免费试用', '福利', '大促', '营销', '订购', '续费'
+      ];
+
+      const modalCandidates = Array.from(document.querySelectorAll([
+        '.mtd-modal',
+        '.mtd-modal-wrap',
+        '.ant-modal',
+        '.ant-modal-wrap',
+        '.mtd-notification',
+        '.ant-notification',
         '.tippy-box',
         '.popper-wrapper',
-        '.fixed[style*="z-index"]',
-      ];
-      for (const selector of selectors) {
-        for (const element of document.querySelectorAll(selector)) {
-          element.remove(); removed++;
+        '[class*="popover"]',
+        '[class*="Popover"]',
+        '[class*="notification"]',
+        '[class*="Notification"]'
+      ].join(','))).filter(visible);
+
+      for (let i = modalCandidates.length - 1; i >= 0; i--) {
+        const element = modalCandidates[i];
+        const text = safeText(element).slice(0, 1000);
+        if (adKeywords.some((keyword) => text.includes(keyword))) {
+          try {
+            element.remove();
+            handled += 1;
+          } catch (_) {}
         }
       }
-      document.body?.classList.remove('driver-active', 'driver-fade');
-      for (const element of document.querySelectorAll('[class*="driver"]')) {
-        if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
-          element.remove(); removed++;
-        } else {
-          element.classList.remove('driver-active-element', 'driver-no-interaction', 'driver-highlighted-element');
-        }
-      }
-      return removed;
+
+      return handled;
     }
     """
+    total_handled = 0
     try:
-        total_removed = 0
-        for _ in range(5):
+        for _ in range(3):
             count = await page.evaluate(script)
-            total_removed += count
+            total_handled += count
             if count == 0:
                 break
             await page.wait_for_timeout(300)
+
         for frame in page.frames:
             try:
-                fc = await frame.evaluate(script)
-                total_removed += fc
+                count = await frame.evaluate(script)
+                total_handled += count
             except Exception:
                 continue
-        return total_removed
+
+        if total_handled:
+            logging.info("清理/关闭干扰弹窗 count=%s", total_handled)
+
+        return total_handled
     except Exception:
-        return 0
+        return total_handled
 
 
 async def _find_locator(page, selector: str, timeout_ms: int = 30000):
