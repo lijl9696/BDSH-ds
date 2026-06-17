@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: tg-report-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tg_report
+      POSTGRES_USER: tg_report
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tg_report}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ${TG_REPORT_DATA_DIR:-./runtime}/postgres:/var/lib/postgresql/data
+      - ../report-platform/db/init:/docker-entrypoint-initdb.d:ro
+
+  metabase:
+    image: metabase/metabase:v0.52.4
+    container_name: tg-report-metabase
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "3000:3000"
+    volumes:
+      - ${TG_REPORT_DATA_DIR:-./runtime}/metabase:/metabase-data
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+
+  report-web:
+    build:
+      context: ../report-platform
+    container_name: tg-report-web
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://tg_report:${POSTGRES_PASSWORD:-tg_report}@postgres:5432/tg_report
+      UPLOAD_DIR: /data/uploads
+      PRESET_PATH: /app/config/report_presets.yml
+      DASHBOARD_URL: ${DASHBOARD_URL:-}
+    volumes:
+      - ${TG_REPORT_DATA_DIR:-./runtime}/uploads:/data/uploads
+      - ../report-platform/config:/app/config:ro
+
+  collector:
+    build:
+      context: ../collector
+    container_name: tg-report-collector
+    restart: unless-stopped
+    depends_on:
+      - report-web
+    environment:
+      REPORT_WEB_BASE_URL: http://report-web:8000
+      IMPORT_AUTH_USERNAME: ${IMPORT_AUTH_USERNAME:-admin}
+      IMPORT_AUTH_PASSWORD: ${IMPORT_AUTH_PASSWORD:-change_me}
+      COLLECTOR_JOBS_PATH: /app/config/jobs.yml
+      COLLECTOR_DOWNLOADS_DIR: /app/downloads
+      COLLECTOR_STATE_DIR: /app/state
+      COLLECTOR_LOGS_DIR: /app/logs
+      COLLECTOR_HEADLESS: "true"
+      COLLECTOR_TIMEZONE: Asia/Shanghai
+      TZ: Asia/Shanghai
+    volumes:
+      - ${TG_REPORT_DATA_DIR:-./runtime}/collector/downloads:/app/downloads
+      - ${TG_REPORT_DATA_DIR:-./runtime}/collector/state:/app/state
+      - ${TG_REPORT_DATA_DIR:-./runtime}/collector/logs:/app/logs
+      - ../collector/config/jobs.example.yml:/app/config/jobs.yml:ro
+
+  backup:
+    image: postgres:16
+    container_name: tg-report-backup
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-tg_report}
+    volumes:
+      - ${TG_REPORT_DATA_DIR:-./runtime}/backups:/backups
+    command: >
+      sh -c "while true; do
+      pg_dump -h postgres -U tg_report tg_report | gzip > /backups/tg_report_$$(date +%F_%H%M%S).sql.gz;
+      find /backups -name 'tg_report_*.sql.gz' -mtime +30 -delete;
+      sleep 86400;
+      done"

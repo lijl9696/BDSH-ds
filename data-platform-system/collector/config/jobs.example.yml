@@ -1,0 +1,74 @@
+jobs:
+  - code: meituan_daily
+    enabled: false
+    platform_code: meituan
+    schedule_cron: "30 8 * * *"
+    state_file: meituan_state.json
+    report_page_url: "https://e.dianping.com/app/merchant-platform/0fb1bec0bade47d?iUrl=Ly9oNS5kaWFucGluZy5jb20vdmctcGMtYWR2aWNlL3JlcG9ydC1jZW50ZXIvaW5kZXguaHRtbA"
+    download_mode: direct
+    steps:
+      - action: js_click
+        selector: "button[data-click-bid='b_cbg_x7daorvu_mc']:has-text('使用模板')"
+      - action: wait
+        seconds: 2
+      - action: click
+        selector: ".download-modal .mtd-date-picker-editor"
+      - action: wait
+        seconds: 1
+      - action: click_target_date_range
+      - action: wait
+        seconds: 4
+    download_selector: "button[data-click-bid='b_cbg_o9nfc94x_mc']:has-text('下载')"
+    duplicate_policy: skip
+    wait_after_trigger_seconds: 2
+    download_timeout_seconds: 600
+    download_retry_attempts: 6
+    download_retry_delay_seconds: 600
+
+  - code: douyin_daily
+    enabled: false
+    platform_code: douyin
+    schedule_cron: "0 7 * * *"
+    state_file: douyin_state.json
+    report_page_url: "https://www.life-data.cn/data-bazaar/my/index?groupid=1732422563964928"
+    download_mode: task_center
+    task_name_template: "douyin_daily_{target_date:%Y%m%d}_{now:%H%M%S}"
+    steps:
+      - action: click
+        selector: ".byted-tab-bar-item:has-text('门店')"
+      - action: click
+        selector: ".byted-form-container:has-text('汇总方式') .byted-radio-tag:has-text('按日')"
+      - action: click_form_control_by_label
+        value: "统计周期"
+      - action: wait
+        seconds: 1
+      - action: click_target_date_range
+      - action: wait
+        seconds: 2
+      - action: click_all_by_text
+        value: "全选"
+      - action: wait
+        seconds: 2
+      - action: click
+        selector: "button:has-text('创建下载任务')"
+      - action: fill
+        selector: ".byted-modal:has-text('任务命名') input[placeholder='请输入任务名']"
+        value: "{task_name}"
+      - action: click
+        selector: ".byted-modal:has-text('任务命名') .byted-confirm-ok"
+      - action: wait
+        seconds: 2
+    download_center_url: "https://www.life-data.cn/data-bazaar/my/tasks?groupid=1732422563964928"
+    download_selector: "td[aria-colindex='4'] button:has-text('下载')"
+    task_refresh_selector: "button:has-text('刷新')"
+    task_row_selector: "tr.byted-Table-Row"
+    task_name_selector: "td[aria-colindex='1']"
+    task_status_selector: "td[aria-colindex='2']"
+    task_download_selector: "td[aria-colindex='4'] button:has-text('下载')"
+    task_done_text: "已完成"
+    task_failed_text: "失败"
+    task_poll_interval_seconds: 30
+    task_timeout_seconds: 900
+    duplicate_policy: skip
+    wait_after_trigger_seconds: 10
+    download_timeout_seconds: 600

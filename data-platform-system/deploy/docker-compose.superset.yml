@@ -1,0 +1,61 @@
+services:
+  superset-postgres:
+    image: postgres:16
+    container_name: tg-report-superset-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${SUPERSET_POSTGRES_PASSWORD:?set SUPERSET_POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U superset -d superset
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/superset/postgres:/var/lib/postgresql/data
+
+  superset:
+    image: ${SUPERSET_IMAGE:-apache/superset:latest}
+    container_name: tg-report-superset
+    restart: unless-stopped
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+    ports:
+      - "${SUPERSET_PORT:-8088}:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?set SUPERSET_SECRET_KEY in .env}
+      SUPERSET_SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:${SUPERSET_POSTGRES_PASSWORD}@superset-postgres:5432/superset
+      SUPERSET_LOAD_EXAMPLES: "no"
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD in .env}
+      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-BDSH}
+      SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-Admin}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/superset/home:/app/superset_home
+    command: >
+      /bin/sh -c "
+      superset db upgrade &&
+      superset fab create-admin
+      --username \"$${SUPERSET_ADMIN_USERNAME}\"
+      --firstname \"$${SUPERSET_ADMIN_FIRSTNAME}\"
+      --lastname \"$${SUPERSET_ADMIN_LASTNAME}\"
+      --email \"$${SUPERSET_ADMIN_EMAIL}\"
+      --password \"$${SUPERSET_ADMIN_PASSWORD}\" || true &&
+      superset init &&
+      gunicorn
+      --bind 0.0.0.0:8088
+      --workers 2
+      --worker-class gthread
+      --threads 20
+      --timeout 120
+      'superset.app:create_app()'
+      "
