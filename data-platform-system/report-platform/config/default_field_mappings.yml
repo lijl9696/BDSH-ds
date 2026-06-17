@@ -1,0 +1,294 @@
+field_mappings:
+  - platform_code: meituan
+    source_field: 点评星级
+    metric_code: dianping_star_rating
+    data_type: number
+  - platform_code: meituan
+    source_field: 美团星级
+    metric_code: meituan_star_rating
+    data_type: number
+  - platform_code: meituan
+    source_field: 经营评分得分
+    metric_code: meituan_business_score
+    data_type: number
+  - platform_code: meituan
+    source_field: 经营评分牌级
+    metric_code: meituan_business_medal
+    data_type: text
+  - platform_code: meituan
+    source_field: 曝光量
+    metric_code: exposure
+    data_type: number
+  - platform_code: meituan
+    source_field: 曝光次数
+    metric_code: exposure_times
+    data_type: number
+  - platform_code: meituan
+    source_field: 曝光访问转化率
+    metric_code: exposure_visit_rate
+    data_type: number
+  - platform_code: meituan
+    source_field: 访问量
+    metric_code: visit
+    data_type: number
+  - platform_code: meituan
+    source_field: 访问次数
+    metric_code: visit_times
+    data_type: number
+  - platform_code: meituan
+    source_field: 下单人数
+    metric_code: paid_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 留资人数
+    metric_code: lead_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 下单数量
+    metric_code: paid_order_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 意向转化人数
+    metric_code: intent_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 意向转化率
+    metric_code: intent_conversion_rate
+    data_type: number
+  - platform_code: meituan
+    source_field: 新增收藏人数
+    metric_code: new_favorite_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 累计收藏人数
+    metric_code: total_favorite_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 页面有效平均停留时长
+    metric_code: avg_stay_seconds
+    data_type: number
+  - platform_code: meituan
+    source_field: 推广通曝光次数
+    metric_code: promoted_exposure_times
+    data_type: number
+  - platform_code: meituan
+    source_field: 推广通点击次数
+    metric_code: promoted_click_times
+    data_type: number
+  - platform_code: meituan
+    source_field: 新客人数
+    metric_code: new_customer_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 下单金额
+    metric_code: paid_amount
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销数量
+    metric_code: verified_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销券数
+    metric_code: verified_coupon_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销人次
+    metric_code: verified_visit_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销人数
+    metric_code: verified_user_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销新客人数
+    metric_code: verified_new_customer_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 核销金额
+    metric_code: verified_amount
+    data_type: number
+  - platform_code: meituan
+    source_field: 商家优惠后核销额
+    metric_code: merchant_discount_verified_amount
+    data_type: number
+  - platform_code: meituan
+    source_field: 下单券数
+    metric_code: paid_coupon_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 新增评价数
+    metric_code: new_review_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 新增好评数
+    metric_code: new_positive_review_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 新增中评数
+    metric_code: new_neutral_review_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 新增差评数
+    metric_code: new_negative_review_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 差评回复率
+    metric_code: bad_review_reply_rate
+    data_type: number
+  - platform_code: meituan
+    source_field: 累计评价数
+    metric_code: total_review_count
+    data_type: number
+  - platform_code: meituan
+    source_field: 累计差评数
+    metric_code: total_negative_review_count
+    data_type: number
+
+  - platform_code: douyin
+    source_field: 访问次数
+    metric_code: visit_times
+    data_type: number
+  - platform_code: douyin
+    source_field: 访问量
+    metric_code: visit
+    data_type: number
+  - platform_code: douyin
+    source_field: 商品点击次数
+    metric_code: product_click_times
+    data_type: number
+  - platform_code: douyin
+    source_field: 商品点击人数
+    metric_code: product_click_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 下单数量
+    metric_code: paid_order_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 下单人数
+    metric_code: paid_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 下单金额
+    metric_code: paid_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 意向成交金额
+    metric_code: intent_paid_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 意向成交券数
+    metric_code: intent_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 意向成交人数
+    metric_code: intent_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店页成交后退款金额
+    metric_code: paid_refund_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店页成交后退款券数
+    metric_code: paid_refund_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店页成交后退款人数
+    metric_code: paid_refund_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款金额
+    metric_code: intent_refund_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款券数
+    metric_code: intent_refund_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店意向退款人数
+    metric_code: intent_refund_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 核销金额
+    metric_code: verified_amount
+    data_type: number
+  - platform_code: douyin
+    source_field: 核销券数
+    metric_code: verified_coupon_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 核销人数
+    metric_code: verified_user_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 核销新客人数
+    metric_code: verified_new_customer_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店核销老客数
+    metric_code: verified_old_customer_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 新发布门店关联视频数
+    metric_code: new_store_video_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店视频播放次数
+    metric_code: store_video_play_times
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店评分
+    metric_code: store_rating
+    data_type: number
+  - platform_code: douyin
+    source_field: 新增评价数
+    metric_code: new_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 新增好评数
+    metric_code: new_positive_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 新增中差评数
+    metric_code: new_neutral_negative_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 累计评价数
+    metric_code: total_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 累计好评数
+    metric_code: total_positive_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 累计中差评数
+    metric_code: total_neutral_negative_review_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 评价回复率
+    metric_code: review_reply_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险投诉率
+    metric_code: business_risk_complaint_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险差评率
+    metric_code: business_risk_bad_review_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 经营风险商责退单率
+    metric_code: business_risk_merchant_refund_rate
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店点亮数
+    metric_code: store_light_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 点亮后的投稿数
+    metric_code: post_after_light_count
+    data_type: number
+  - platform_code: douyin
+    source_field: 门店收藏数
+    metric_code: store_favorite_count
+    data_type: number

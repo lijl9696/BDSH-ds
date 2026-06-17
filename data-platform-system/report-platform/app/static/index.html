@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>团购数据导入</title>
+    <style>
+      :root {
+        --bg: #f6f5f1;
+        --panel: #ffffff;
+        --ink: #1f2523;
+        --muted: #69716d;
+        --line: #ddd8cd;
+        --accent: #0f766e;
+        --accent-dark: #0b5d57;
+        --warn: #a16207;
+        --bad: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+        line-height: 1.5;
+      }
+      header {
+        padding: 24px 32px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #ebe7dd;
+      }
+      .header-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 24px;
+        letter-spacing: 0;
+      }
+      .sub { margin: 0; color: var(--muted); font-size: 14px; }
+      .dashboard-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        padding: 0 14px;
+        border-radius: 6px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .dashboard-link:hover { background: var(--accent-dark); }
+      main {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) 1fr;
+        gap: 18px;
+        padding: 20px 32px 36px;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+      }
+      h2 {
+        margin: 0 0 14px;
+        font-size: 17px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      input, select, button {
+        width: 100%;
+        min-height: 38px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        font: inherit;
+        background: #fff;
+      }
+      input[type="file"] {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .upload-zone {
+        display: block;
+        margin: 0 0 14px;
+        padding: 28px 18px;
+        border: 2px dashed #b9c8c4;
+        border-radius: 8px;
+        background: #f8fbfa;
+        color: var(--ink);
+        cursor: pointer;
+        text-align: center;
+      }
+      .upload-zone strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--accent-dark);
+        font-size: 18px;
+      }
+      .upload-zone span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .file-name {
+        margin-top: 10px;
+        color: var(--ink);
+        font-size: 13px;
+        word-break: break-all;
+      }
+      .form-row {
+        margin-top: 12px;
+      }
+      .compact-options {
+        margin-top: 14px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+      }
+      .compact-options summary {
+        padding-top: 12px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .compact-options .grid {
+        margin-top: 8px;
+      }
+      .compact-options label {
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      .compact-options input,
+      .compact-options select {
+        min-height: 32px;
+        padding: 5px 8px;
+        font-size: 13px;
+      }
+      .hint {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .commit-panel {
+        margin-top: 16px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfaf7;
+      }
+      .commit-panel p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .commit-panel strong {
+        color: var(--ink);
+      }
+      .commit-message {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #eef7f5;
+        color: #0f5e57;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .commit-message.error {
+        background: #fff1f0;
+        color: var(--bad);
+      }
+      button {
+        margin-top: 14px;
+        border: 0;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:hover { background: var(--accent-dark); }
+      button.secondary {
+        background: #e7e3da;
+        color: var(--ink);
+      }
+      button.ghost {
+        background: #f3f0e8;
+        color: var(--ink);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .toolbar button {
+        width: auto;
+        min-height: 34px;
+        margin-top: 0;
+        padding: 6px 12px;
+        font-size: 13px;
+      }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(31, 37, 35, 0.36);
+        z-index: 10;
+      }
+      .modal-backdrop.open { display: flex; }
+      .modal {
+        width: min(520px, 100%);
+        max-height: calc(100vh - 40px);
+        overflow: auto;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 18px;
+        box-shadow: 0 18px 50px rgba(31, 37, 35, 0.18);
+      }
+      .modal.store-config-modal { width: min(1100px, 100%); }
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .modal-header h2 { margin: 0; }
+      .modal-close {
+        width: auto;
+        min-height: 30px;
+        margin: 0;
+        padding: 4px 10px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .config-filter {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+      .config-filter label { margin-top: 0; }
+      .config-actions {
+        display: flex;
+        gap: 8px;
+        align-items: end;
+      }
+      .config-actions button {
+        min-height: 38px;
+        margin-top: 0;
+      }
+      .config-table-wrap {
+        max-height: 430px;
+        overflow: auto;
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .config-table input,
+      .config-table select {
+        min-width: 92px;
+        min-height: 32px;
+        padding: 5px 7px;
+        font-size: 12px;
+      }
+      .config-table button {
+        width: auto;
+        min-height: 32px;
+        margin-top: 0;
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+      .nowrap { white-space: nowrap; }
+      .status {
+        margin-top: 14px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #f3f0e8;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fbfaf7;
+      }
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .metric strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 21px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 9px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+        background: #fbfaf7;
+      }
+      .pill {
+        display: inline-block;
+        margin: 3px 5px 3px 0;
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: #e7f4f1;
+        color: #0f5e57;
+        font-size: 12px;
+      }
+      .pill.warn {
+        background: #fff4d6;
+        color: var(--warn);
+      }
+      .pill.dim {
+        background: #f0ede6;
+        color: #5f675f;
+      }
+      .empty {
+        color: var(--muted);
+        padding: 28px;
+        text-align: center;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+      }
+	      @media (max-width: 900px) {
+	        main { grid-template-columns: 1fr; padding: 16px; }
+	        header { padding: 20px 16px 14px; }
+	        .header-row { display: block; }
+	        .dashboard-link { margin-top: 12px; width: 100%; }
+	        .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	      }
+    </style>
+  </head>
+  <body>
+	    <header>
+	      <div class="header-row">
+	        <div>
+	          <h1>团购数据导入</h1>
+	          <p class="sub">上传平台报表，先预览字段和重复数据，确认后再写入指标库。</p>
+	        </div>
+	        <a id="dashboardLink" class="dashboard-link" href="/dashboard/2">打开仪表盘</a>
+	      </div>
+	    </header>
+
+    <main>
+	      <section>
+	        <div class="toolbar">
+	          <h2>上传批次</h2>
+	          <button id="storeConfigOpen" class="ghost" type="button">门店配置</button>
+	        </div>
+	        <form id="uploadForm">
+	          <label class="upload-zone" for="file">
+	            <strong>选择平台报表文件</strong>
+	            <span>支持 .xlsx / .xls / .csv，系统会从表格内识别日期、门店和指标字段。</span>
+	            <span id="fileName" class="file-name">尚未选择文件</span>
+	          </label>
+	          <input id="file" name="file" type="file" accept=".xlsx,.xls,.csv" required />
+
+	          <div class="form-row">
+	            <label for="platform">平台</label>
+	            <select id="platform" name="platform_code">
+	              <option value="meituan">美团</option>
+	              <option value="douyin">抖音</option>
+	            </select>
+	          </div>
+
+	          <p class="hint">数据周期以报表内的“日期 / 周”字段为准，这里不需要手动填写。</p>
+
+	          <details class="compact-options">
+	            <summary>高级选项（一般不用改）</summary>
+
+	            <label for="policy">重复数据处理</label>
+	            <select id="policy" name="duplicate_policy">
+	              <option value="skip">跳过已存在数据（推荐）</option>
+	              <option value="overwrite">覆盖已存在数据</option>
+	              <option value="version">保留历史版本</option>
+	            </select>
+
+	            <div class="grid">
+	              <div>
+	                <label for="dateField">日期字段</label>
+	                <input id="dateField" name="date_field" placeholder="自动识别" />
+	              </div>
+	              <div>
+	                <label for="storeCodeField">门店编码字段</label>
+	                <input id="storeCodeField" name="store_code_field" placeholder="自动识别" />
+	              </div>
+	            </div>
+
+	            <label for="storeNameField">门店名称字段</label>
+	            <input id="storeNameField" name="store_name_field" placeholder="自动识别" />
+	          </details>
+
+	          <button type="submit">上传并生成预览</button>
+	        </form>
+        <div id="status" class="status">等待上传。</div>
+      </section>
+
+      <section>
+        <h2>导入预览</h2>
+        <div id="preview" class="empty">上传文件后，这里会显示识别结果。</div>
+      </section>
+	    </main>
+
+	    <div id="storeConfigModal" class="modal-backdrop">
+	      <div class="modal store-config-modal">
+	        <div class="modal-header">
+	          <h2>门店配置</h2>
+	          <button id="storeConfigClose" class="ghost modal-close" type="button">关闭</button>
+	        </div>
+	        <p class="hint">Excel 只需要一个 sheet：区域配置。字段为：所在省份、所在城市、大区、负责人，可选门店名称、门店性质。门店性质可填：直营、加盟、全部。导入时优先按门店名称匹配，其次按城市+门店性质匹配；同城存在直营/加盟冲突且无法判断时会进入待确认。</p>
+	        <form id="storeConfigForm">
+	          <label class="upload-zone" for="storeConfigFile">
+	            <strong>选择门店配置表</strong>
+	            <span>支持 .xlsx / .xls / .csv</span>
+	            <span id="storeConfigFileName" class="file-name">尚未选择文件</span>
+	          </label>
+	          <input id="storeConfigFile" name="file" type="file" accept=".xlsx,.xls,.csv" required />
+	          <button type="submit">上传并更新门店配置</button>
+	        </form>
+	        <div id="storeConfigStatus" class="status">等待上传。</div>
+	        <div class="config-filter">
+	          <div>
+	            <label for="storeConfigStatusFilter">匹配状态</label>
+	            <select id="storeConfigStatusFilter">
+	              <option value="review">待确认</option>
+	              <option value="unconfigured">未配置</option>
+	              <option value="auto">自动匹配</option>
+	              <option value="confirmed">已确认</option>
+	              <option value="">全部</option>
+	            </select>
+	          </div>
+	          <div>
+	            <label for="storeConfigCityFilter">城市</label>
+	            <input id="storeConfigCityFilter" placeholder="例如 郑州" />
+	          </div>
+	          <div>
+	            <label for="storeConfigRegionFilter">大区</label>
+	            <input id="storeConfigRegionFilter" placeholder="精确大区" />
+	          </div>
+	          <div>
+	            <label for="storeConfigSearch">关键词</label>
+	            <input id="storeConfigSearch" placeholder="门店/编码/负责人" />
+	          </div>
+	          <div class="config-actions">
+	            <button id="storeConfigLoad" type="button">查询</button>
+	            <button id="storeConfigReapply" class="secondary" type="button">重新匹配</button>
+	          </div>
+	        </div>
+	        <div id="storeConfigList" class="config-table-wrap empty">点击查询加载门店。</div>
+	      </div>
+	    </div>
+
+	    <script>
+	      const uploadForm = document.querySelector("#uploadForm");
+	      const statusBox = document.querySelector("#status");
+	      const previewBox = document.querySelector("#preview");
+	      const fileInput = document.querySelector("#file");
+	      const fileName = document.querySelector("#fileName");
+	      const storeConfigOpen = document.querySelector("#storeConfigOpen");
+	      const storeConfigClose = document.querySelector("#storeConfigClose");
+	      const storeConfigModal = document.querySelector("#storeConfigModal");
+	      const storeConfigForm = document.querySelector("#storeConfigForm");
+	      const storeConfigFile = document.querySelector("#storeConfigFile");
+	      const storeConfigFileName = document.querySelector("#storeConfigFileName");
+	      const storeConfigStatus = document.querySelector("#storeConfigStatus");
+	      const storeConfigStatusFilter = document.querySelector("#storeConfigStatusFilter");
+	      const storeConfigCityFilter = document.querySelector("#storeConfigCityFilter");
+	      const storeConfigRegionFilter = document.querySelector("#storeConfigRegionFilter");
+	      const storeConfigSearch = document.querySelector("#storeConfigSearch");
+	      const storeConfigLoad = document.querySelector("#storeConfigLoad");
+	      const storeConfigReapply = document.querySelector("#storeConfigReapply");
+	      const storeConfigList = document.querySelector("#storeConfigList");
+	      const dashboardLink = document.querySelector("#dashboardLink");
+	      let currentBatchId = null;
+
+	      if (dashboardLink) {
+	        dashboardLink.href = `${window.location.protocol}//${window.location.hostname}:3000`;
+	        loadRuntimeConfig();
+	      }
+
+      function setStatus(text) {
+        statusBox.textContent = text;
+      }
+
+      function fieldValue(id) {
+        const value = document.querySelector(id).value.trim();
+        return value || null;
+      }
+
+	      function appendOptional(formData, name, value) {
+	        if (value) formData.append(name, value);
+	      }
+
+	      function todayDate() {
+	        const now = new Date();
+	        const offset = now.getTimezoneOffset() * 60000;
+	        return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+	      }
+
+	      fileInput.addEventListener("change", () => {
+	        fileName.textContent = fileInput.files[0]?.name || "尚未选择文件";
+	      });
+
+	      storeConfigOpen.addEventListener("click", () => {
+	        storeConfigModal.classList.add("open");
+	        loadStoreConfigRows();
+	      });
+
+	      storeConfigClose.addEventListener("click", () => {
+	        storeConfigModal.classList.remove("open");
+	      });
+
+	      storeConfigModal.addEventListener("click", (event) => {
+	        if (event.target === storeConfigModal) {
+	          storeConfigModal.classList.remove("open");
+	        }
+	      });
+
+	      storeConfigFile.addEventListener("change", () => {
+	        storeConfigFileName.textContent = storeConfigFile.files[0]?.name || "尚未选择文件";
+	      });
+
+	      storeConfigForm.addEventListener("submit", async (event) => {
+	        event.preventDefault();
+	        const file = storeConfigFile.files[0];
+	        if (!file) return;
+	        const formData = new FormData();
+	        formData.append("file", file);
+	        storeConfigStatus.textContent = "正在更新门店配置...";
+	        try {
+	          const result = await request("/store-config/upload", { method: "POST", body: formData });
+	          storeConfigStatus.textContent = `更新完成。\n区域配置行数：${result.stats.area_rows}\n写入区域：${result.stats.upserted_areas}\n异常行：${result.stats.warnings}`;
+	          loadStoreConfigRows();
+	        } catch (error) {
+	          storeConfigStatus.textContent = `更新失败：${error.message}`;
+	        }
+	      });
+
+	      storeConfigLoad.addEventListener("click", loadStoreConfigRows);
+
+	      storeConfigReapply.addEventListener("click", async () => {
+	        storeConfigStatus.textContent = "正在按最新配置重新匹配门店...";
+	        try {
+	          const result = await request("/store-config/stores/reapply", { method: "POST" });
+	          storeConfigStatus.textContent = `重新匹配完成，更新门店数：${result.updated_stores}`;
+	          loadStoreConfigRows();
+	        } catch (error) {
+	          storeConfigStatus.textContent = `重新匹配失败：${error.message}`;
+	        }
+	      });
+
+	      storeConfigList.addEventListener("click", async (event) => {
+	        const button = event.target.closest("[data-save-store]");
+	        if (!button) return;
+	        const row = button.closest("tr");
+	        const storeCode = button.dataset.saveStore;
+	        const payload = {
+	          store_type: row.querySelector("[data-field='store_type']").value,
+	          region: row.querySelector("[data-field='region']").value.trim(),
+	          owner: row.querySelector("[data-field='owner']").value.trim(),
+	        };
+	        if (!payload.region || !payload.owner) {
+	          storeConfigStatus.textContent = "大区和负责人不能为空。";
+	          return;
+	        }
+	        button.disabled = true;
+	        try {
+	          await request(`/store-config/stores/${encodeURIComponent(storeCode)}/assignment`, {
+	            method: "POST",
+	            headers: { "Content-Type": "application/json" },
+	            body: JSON.stringify(payload),
+	          });
+	          storeConfigStatus.textContent = `已保存：${row.dataset.storeName}`;
+	          loadStoreConfigRows();
+	        } catch (error) {
+	          storeConfigStatus.textContent = `保存失败：${error.message}`;
+	        } finally {
+	          button.disabled = false;
+	        }
+	      });
+
+	      previewBox.addEventListener("click", (event) => {
+	        const button = event.target.closest("#commitButton");
+	        if (button) {
+	          commitBatch(button);
+	        }
+	      });
+
+	      uploadForm.addEventListener("submit", async (event) => {
+	        event.preventDefault();
+	        const file = fileInput.files[0];
+	        if (!file) return;
+
+	        const formData = new FormData();
+	        formData.append("platform_code", document.querySelector("#platform").value);
+	        formData.append("period_start", todayDate());
+	        formData.append("period_end", todayDate());
+	        formData.append("duplicate_policy", document.querySelector("#policy").value);
+        appendOptional(formData, "date_field", fieldValue("#dateField"));
+        appendOptional(formData, "store_code_field", fieldValue("#storeCodeField"));
+        appendOptional(formData, "store_name_field", fieldValue("#storeNameField"));
+        formData.append("file", file);
+
+        setStatus("正在上传文件...");
+        previewBox.className = "empty";
+        previewBox.textContent = "正在解析预览...";
+        try {
+          const uploaded = await request("/imports/files", { method: "POST", body: formData });
+          currentBatchId = uploaded.batch_id;
+          setStatus(`上传成功。批次 ID：${currentBatchId}\n正在获取预览...`);
+          const preview = await request(`/imports/${currentBatchId}/preview`);
+          renderPreview(preview);
+          setStatus(`预览完成。批次 ID：${currentBatchId}`);
+	        } catch (error) {
+	          setStatus(`上传或预览失败：${error.message}`);
+	          previewBox.className = "empty";
+	          previewBox.textContent = error.message.includes("已经导入过")
+	            ? "这个文件已经导入过，不需要重复入库。"
+	            : "请检查文件格式、字段映射或日期/门店字段。";
+	        }
+	      });
+
+	      async function commitBatch(button) {
+	        if (!currentBatchId) return;
+	        const formData = new FormData();
+	        const policy = document.querySelector("#policy").value;
+	        const messageBox = document.querySelector("#commitMessage");
+	        if (button) {
+	          button.disabled = true;
+	          button.textContent = "正在入库...";
+	        }
+	        if (messageBox) {
+	          messageBox.className = "commit-message";
+	          messageBox.textContent = "正在写入数据库，请不要重复点击。数据量大时可能需要几十秒。";
+	        }
+	        formData.append("duplicate_policy", policy);
+	        setStatus("正在确认入库...");
+	        try {
+	          const result = await request(`/imports/${currentBatchId}/commit`, { method: "POST", body: formData });
+	          const doneText = `入库完成。\n写入指标值：${result.stats.inserted_metric_values}\n跳过重复：${result.stats.skipped_duplicates}\n异常行：${result.stats.warnings}`;
+	          setStatus(doneText);
+	          if (messageBox) {
+	            messageBox.className = "commit-message";
+	            messageBox.textContent = doneText;
+	          }
+	          if (button) {
+	            button.textContent = "已完成入库";
+	          }
+	        } catch (error) {
+	          setStatus(`入库失败：${error.message}`);
+	          if (messageBox) {
+	            messageBox.className = "commit-message error";
+	            messageBox.textContent = `入库失败：${error.message}`;
+	          }
+	          if (button) {
+	            button.disabled = false;
+	            button.textContent = "重新确认入库";
+	          }
+	        }
+	      }
+
+	      async function loadStoreConfigRows() {
+	        const params = new URLSearchParams();
+	        appendParam(params, "status", storeConfigStatusFilter.value);
+	        appendParam(params, "city", storeConfigCityFilter.value.trim());
+	        appendParam(params, "region", storeConfigRegionFilter.value.trim());
+	        appendParam(params, "q", storeConfigSearch.value.trim());
+	        params.set("limit", "200");
+	        storeConfigList.className = "config-table-wrap empty";
+	        storeConfigList.textContent = "正在加载门店...";
+	        try {
+	          const result = await request(`/store-config/stores?${params.toString()}`);
+	          renderStoreConfigRows(result.items || []);
+	        } catch (error) {
+	          storeConfigList.className = "config-table-wrap empty";
+	          storeConfigList.textContent = `加载失败：${error.message}`;
+	        }
+	      }
+
+	      function appendParam(params, name, value) {
+	        if (value) params.set(name, value);
+	      }
+
+	      function renderStoreConfigRows(items) {
+	        if (!items.length) {
+	          storeConfigList.className = "config-table-wrap empty";
+	          storeConfigList.textContent = "没有符合条件的门店。";
+	          return;
+	        }
+	        storeConfigList.className = "config-table-wrap";
+	        const rows = items.map((item) => {
+	          const statusText = {
+	            confirmed: "已确认",
+	            auto: "自动",
+	            review: "待确认",
+	            unconfigured: "未配置",
+	          }[item.assignment_status] || item.assignment_status || "";
+	          return `
+	            <tr data-store-name="${escapeAttr(item.name || "")}">
+	              <td class="nowrap">${escapeHtml(statusText)}<br><span class="hint">${escapeHtml(item.assignment_source || "")}</span></td>
+	              <td>${escapeHtml(item.name || "")}<br><span class="hint">${escapeHtml(item.store_code || "")}</span></td>
+	              <td class="nowrap">${escapeHtml(item.province || "")}<br>${escapeHtml(item.city || "")}</td>
+	              <td>
+	                <select data-field="store_type">
+	                  ${storeTypeOption("direct", "直营", item.store_type)}
+	                  ${storeTypeOption("franchise", "加盟", item.store_type)}
+	                  ${storeTypeOption("unknown", "未知", item.store_type)}
+	                </select>
+	              </td>
+	              <td><input data-field="region" value="${escapeAttr(item.region || "")}" placeholder="大区" /></td>
+	              <td><input data-field="owner" value="${escapeAttr(item.owner || "")}" placeholder="负责人" /></td>
+	              <td>${escapeHtml(item.assignment_note || "")}</td>
+	              <td><button type="button" data-save-store="${escapeAttr(item.store_code)}">保存</button></td>
+	            </tr>
+	          `;
+	        }).join("");
+	        storeConfigList.innerHTML = `
+	          <table class="config-table">
+	            <thead>
+	              <tr>
+	                <th>状态</th>
+	                <th>门店</th>
+	                <th>省市</th>
+	                <th>性质</th>
+	                <th>大区</th>
+	                <th>负责人</th>
+	                <th>说明</th>
+	                <th>操作</th>
+	              </tr>
+	            </thead>
+	            <tbody>${rows}</tbody>
+	          </table>
+	        `;
+	      }
+
+	      function storeTypeOption(value, label, current) {
+	        return `<option value="${value}" ${current === value ? "selected" : ""}>${label}</option>`;
+	      }
+
+      async function request(url, options = {}) {
+        const response = await fetch(url, options);
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || response.statusText);
+        }
+        return payload;
+      }
+
+	      async function loadRuntimeConfig() {
+	        try {
+	          const config = await request("/runtime-config");
+	          if (config.dashboard_url) {
+	            dashboardLink.href = config.dashboard_url;
+	          }
+	        } catch (_error) {
+	          dashboardLink.href = `${window.location.protocol}//${window.location.hostname}:3000`;
+	        }
+	      }
+
+      function renderPreview(data) {
+        previewBox.className = "";
+        const keyFields = [
+          data.key_fields.date_field,
+          data.key_fields.store_code_field,
+          data.key_fields.store_name_field,
+          "省份",
+          "所在省份",
+          "城市",
+          "所在城市",
+          "所在区域",
+        ].filter(Boolean);
+        const keyFieldSet = new Set(keyFields);
+        const dimensionFields = data.unmapped_fields.filter((item) => keyFieldSet.has(item));
+        const needMappingFields = data.unmapped_fields.filter((item) => !keyFieldSet.has(item));
+        const dimensions = dimensionFields.map((item) => `<span class="pill dim">${escapeHtml(item)}</span>`).join("");
+        const mapped = data.mapped_fields.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
+        const unmapped = needMappingFields.slice(0, 30).map((item) => `<span class="pill warn">${escapeHtml(item)}</span>`).join("");
+        const duplicateText = data.duplicate_metric_values > 0
+          ? `发现 ${data.duplicate_metric_values} 条已存在指标。默认会跳过这些重复数据，不会反复写入。`
+          : "没有发现重复指标，可以直接入库。";
+        const warnings = data.sample_warnings.length
+          ? data.sample_warnings.map((item) => `<tr><td>${item.row_number}</td><td>${escapeHtml(item.warning)}</td></tr>`).join("")
+          : `<tr><td colspan="2">暂无异常样例</td></tr>`;
+
+        previewBox.innerHTML = `
+          <div class="cards">
+            <div class="metric"><span>总行数</span><strong>${data.rows}</strong></div>
+            <div class="metric"><span>门店数</span><strong>${data.store_count}</strong></div>
+            <div class="metric"><span>可写入指标值</span><strong>${data.metric_value_count}</strong></div>
+            <div class="metric"><span>重复指标值</span><strong>${data.duplicate_metric_values}</strong></div>
+          </div>
+	          <table>
+	            <tr><th>平台</th><td>${escapeHtml(data.platform_profile.name)}</td></tr>
+	            <tr><th>门店与日期字段</th><td>${dimensions || "已自动识别"}<p class="hint">这些是用来确定日期、门店、省份、城市的基础信息，不会当作指标金额或数量写入。</p></td></tr>
+	            <tr><th>可入库指标字段</th><td>${mapped || "暂无"}<p class="hint">这些字段会作为曝光量、访问量、下单金额、核销金额等指标写入数据库。</p></td></tr>
+	            <tr><th>需处理字段</th><td>${unmapped || "暂无"}${needMappingFields.length > 30 ? " ..." : ""}<p class="hint">这里如果不是“暂无”，通常表示平台新增了字段，需要后续配置成指标或忽略。</p></td></tr>
+	            <tr><th>异常行数</th><td>${data.warnings}</td></tr>
+	          </table>
+	          <h2 style="margin-top:18px;">异常样例</h2>
+	          <table><tr><th>行号</th><th>说明</th></tr>${warnings}</table>
+		          <div class="commit-panel">
+		            <p><strong>下一步：</strong>${escapeHtml(duplicateText)}</p>
+		            <p>默认规则：已经存在的数据不重复写入；只有在高级选项里选择“覆盖已存在数据”时才会替换。</p>
+		            <button id="commitButton" type="button">确认入库</button>
+		            <div id="commitMessage" class="commit-message">点击后会写入数据库，完成后这里会显示结果。</div>
+		          </div>
+	        `;
+	      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+	      function escapeAttr(value) {
+	        return escapeHtml(value).replaceAll("`", "&#096;");
+	      }
+    </script>
+  </body>
+</html>

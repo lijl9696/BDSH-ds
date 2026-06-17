@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from collections.abc import Generator
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from .config import settings
+
+
+engine = create_engine(settings.database_url, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def create_all() -> None:
+    from . import models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)
+    ensure_schema_columns()
+    ensure_server_defaults()
+    ensure_constraints()
+
+
+def ensure_schema_columns() -> None:
+    statements = [
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_type VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS assignment_status VARCHAR(32) NOT NULL DEFAULT 'unconfigured'",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS assignment_source VARCHAR(64)",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS assignment_confidence INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS assignment_note TEXT",
+        "ALTER TABLE area_assignments ADD COLUMN IF NOT EXISTS store_name VARCHAR(255) NOT NULL DEFAULT ''",
+        "ALTER TABLE area_assignments ADD COLUMN IF NOT EXISTS store_type VARCHAR(32) NOT NULL DEFAULT 'all'",
+        "ALTER TABLE area_assignments ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
+
+
+def ensure_server_defaults() -> None:
+    statements = [
+        "ALTER TABLE platforms ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE metrics ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE field_mappings ALTER COLUMN clean_rule SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE field_mappings ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE import_batches ALTER COLUMN status SET DEFAULT 'pending'",
+        "ALTER TABLE import_batches ALTER COLUMN duplicate_policy SET DEFAULT 'skip'",
+        "ALTER TABLE import_batches ALTER COLUMN source_type SET DEFAULT 'file'",
+        "ALTER TABLE import_batches ALTER COLUMN import_options SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE import_batches ALTER COLUMN row_count SET DEFAULT 0",
+        "ALTER TABLE import_batches ALTER COLUMN warning_count SET DEFAULT 0",
+        "ALTER TABLE metric_values ALTER COLUMN dimensions SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE metric_values ALTER COLUMN dimension_hash SET DEFAULT 'default'",
+        "ALTER TABLE metric_values ALTER COLUMN version SET DEFAULT 1",
+        "ALTER TABLE metric_values ALTER COLUMN is_active SET DEFAULT TRUE",
+        "ALTER TABLE text_metric_values ALTER COLUMN dimensions SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE text_metric_values ALTER COLUMN dimension_hash SET DEFAULT 'default'",
+        "ALTER TABLE text_metric_values ALTER COLUMN version SET DEFAULT 1",
+        "ALTER TABLE text_metric_values ALTER COLUMN is_active SET DEFAULT TRUE",
+        "ALTER TABLE derived_metric_rules ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE report_presets ALTER COLUMN enabled SET DEFAULT TRUE",
+        "ALTER TABLE stores ALTER COLUMN status SET DEFAULT 'active'",
+        "ALTER TABLE stores ALTER COLUMN store_type SET DEFAULT 'unknown'",
+        "ALTER TABLE stores ALTER COLUMN assignment_status SET DEFAULT 'unconfigured'",
+        "ALTER TABLE stores ALTER COLUMN assignment_confidence SET DEFAULT 0",
+        "ALTER TABLE stores ALTER COLUMN aliases SET DEFAULT '{}'::jsonb",
+        "ALTER TABLE area_assignments ALTER COLUMN store_name SET DEFAULT ''",
+        "ALTER TABLE area_assignments ALTER COLUMN store_type SET DEFAULT 'all'",
+        "ALTER TABLE area_assignments ALTER COLUMN enabled SET DEFAULT TRUE",
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
+
+
+def ensure_constraints() -> None:
+    statements = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_platforms_code ON platforms(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_stores_store_code ON stores(store_code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_metrics_code ON metrics(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_field_mapping_platform_source ON field_mappings(platform_code, source_field)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_derived_metric_rules_metric_code ON derived_metric_rules(metric_code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_presets_code ON report_presets(code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_assignment_platform_name ON store_assignments(platform_code, store_name)",
+        "ALTER TABLE area_assignments DROP CONSTRAINT IF EXISTS uq_area_assignment_province_city_store",
+        "DROP INDEX IF EXISTS uq_area_assignment_province_city_store",
+        (
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_area_assignment_province_city_store_type') THEN "
+            "ALTER TABLE area_assignments ADD CONSTRAINT uq_area_assignment_province_city_store_type UNIQUE (province, city, store_name, store_type); "
+            "END IF; "
+            "END $$;"
+        ),
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
+
+
+def seed_defaults() -> None:
+    if not settings.seed_path.exists():
+        return
+    sql = settings.seed_path.read_text(encoding="utf-8")
+    statements = [statement.strip() for statement in sql.split(";\n\n") if statement.strip()]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement if statement.endswith(";") else f"{statement};"))
