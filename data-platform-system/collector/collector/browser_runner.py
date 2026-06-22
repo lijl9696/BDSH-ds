@@ -235,7 +235,7 @@ async def _download_report(
     use_direct_date: bool = False,
     run_context: dict[str, object] | None = None,
 ) -> Path:
-    await page.goto(job.report_page_url, wait_until="domcontentloaded")
+    await _goto_page(page, job.report_page_url)
     for step in job.steps or []:
         await _run_step(
             page,
@@ -251,7 +251,7 @@ async def _download_report(
     if job.download_mode == "download_center":
         if not job.download_center_url:
             raise CollectorError(f"{job.code} 使用 download_center 模式但没有配置 download_center_url。")
-        await page.goto(job.download_center_url, wait_until="domcontentloaded")
+        await _goto_page(page, job.download_center_url)
 
     try:
         async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
@@ -285,7 +285,7 @@ async def _download_task_center_file(
         if not getattr(job, field_name):
             raise CollectorError(f"{job.code} 使用 task_center 模式但没有配置 {field_name}。")
 
-    await page.goto(_format_template(job.download_center_url, run_context), wait_until="domcontentloaded")
+    await _goto_page(page, _format_template(job.download_center_url, run_context))
     deadline = monotonic() + job.task_timeout_seconds
     last_status = "未找到任务"
     while monotonic() < deadline:
@@ -355,7 +355,7 @@ async def _run_step(
     if step.action == "goto":
         if not url:
             raise CollectorError("goto step 缺少 url")
-        await page.goto(url, wait_until="domcontentloaded")
+        await _goto_page(page, url)
         return
     if step.action == "click":
         if not selector:
@@ -400,6 +400,16 @@ async def _run_step(
     raise CollectorError(f"不支持的 step action：{step.action}")
 
 
+async def _goto_page(page, url: str | None) -> None:
+    if not url:
+        raise CollectorError("页面跳转缺少 url")
+    try:
+        await page.goto(url, wait_until="commit", timeout=90000)
+    except PlaywrightTimeoutError:
+        # 有些后台页面长期加载埋点/通知流，commit 等不到时继续让后续 selector 判断页面是否可用。
+        logging.warning("页面跳转超时，继续等待目标元素 url=%s", url)
+
+
 async def _click_locator(page, locator) -> None:
     """点击元素前先清理干扰浮层；失败后再次清理并兜底强制点击。
 
@@ -422,7 +432,17 @@ async def _click_locator(page, locator) -> None:
 
 async def _js_click_locator(page, locator) -> None:
     await _clear_blocking_overlays(page)
-    await locator.evaluate("(element) => element.click()")
+    await locator.evaluate(
+        """
+        (element) => {
+          const target = element.querySelector('span, input, button') || element;
+          const options = { bubbles: true, cancelable: true, view: window };
+          for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            target.dispatchEvent(new MouseEvent(type, options));
+          }
+        }
+        """
+    )
 
 
 async def _click_form_control_by_label(page, label_text: str) -> None:
@@ -590,7 +610,7 @@ async def _click_all_by_text(page, text: str) -> None:
     await page.wait_for_timeout(1000)
 
 
-async def _clear_blocking_overlays(page) -> int:
+async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
     """清理可能遮挡点击的广告/引导浮层。
 
     设计原则：
@@ -599,7 +619,7 @@ async def _clear_blocking_overlays(page) -> int:
     3. 不再无差别删除 .mtd-modal、.ant-modal、[class*="modal"]，避免误伤日期选择、下载确认等业务弹窗。
     """
     script = """
-    () => {
+    (aggressive) => {
       let handled = 0;
 
       const visible = (element) => {
@@ -644,14 +664,22 @@ async def _clear_blocking_overlays(page) -> int:
         const candidates = Array.from(document.querySelectorAll(selector)).filter(visible);
         // 从后往前点，通常后出现的弹窗在更上层。
         for (let i = candidates.length - 1; i >= 0; i--) {
+          const container = candidates[i].closest('.mtd-modal, .ant-modal, .byted-modal, [role="dialog"], [class*="popover"], [class*="Popover"]');
+          const text = safeText(container || candidates[i]).slice(0, 1000);
+          const businessKeywords = [
+            '时间范围', '报表预览', '下载', '复制报表', '任务命名',
+            '统计周期', '汇总方式', '创建下载任务', '请输入任务名',
+            '昨天', '近7天', '近30天'
+          ];
+          if (businessKeywords.some((keyword) => text.includes(keyword))) continue;
           if (clickElement(candidates[i])) return handled;
         }
       }
 
-      // 2. 按文字找“关闭/跳过/稍后”类按钮。
+      // 2. 按文字找“关闭/跳过/稍后”类按钮。不要点“确定/取消”，避免误伤业务弹窗。
       const closeTexts = [
-        '关闭', '知道了', '我知道了', '好的', '确定',
-        '暂不', '暂不开启', '取消', '跳过',
+        '关闭', '知道了', '我知道了', '好的',
+        '暂不', '暂不开启', '跳过',
         '稍后再说', '以后再说', '不再提醒', '我再想想'
       ];
 
@@ -740,13 +768,50 @@ async def _clear_blocking_overlays(page) -> int:
         }
       }
 
+      // 5. 目标元素一直找不到时，清理最上层的非业务浮层。
+      if (aggressive) {
+        const businessKeywords = [
+          '时间范围', '报表预览', '下载', '复制报表', '任务命名',
+          '统计周期', '汇总方式', '创建下载任务', '请输入任务名',
+          '昨天', '近7天', '近30天'
+        ];
+        const viewportArea = window.innerWidth * window.innerHeight;
+        const layerCandidates = Array.from(document.querySelectorAll('body *'))
+          .filter(visible)
+          .map((element) => {
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            const zIndex = Number.parseInt(style.zIndex || '0', 10);
+            return { element, style, rect, zIndex: Number.isFinite(zIndex) ? zIndex : 0 };
+          })
+          .filter((item) => {
+            const position = item.style.position;
+            const area = item.rect.width * item.rect.height;
+            return (position === 'fixed' || position === 'absolute')
+              && item.zIndex >= 1000
+              && area >= viewportArea * 0.05;
+          })
+          .sort((a, b) => b.zIndex - a.zIndex || (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
+        for (const item of layerCandidates.slice(0, 3)) {
+          const text = safeText(item.element).slice(0, 1000);
+          if (businessKeywords.some((keyword) => text.includes(keyword))) continue;
+          const close = item.element.querySelector('[class*="close"], [class*="Close"], [aria-label="Close"], [aria-label="关闭"]');
+          if (close && visible(close) && clickElement(close)) return handled;
+          try {
+            item.element.remove();
+            handled += 1;
+            return handled;
+          } catch (_) {}
+        }
+      }
+
       return handled;
     }
     """
     total_handled = 0
     try:
         for _ in range(3):
-            count = await page.evaluate(script)
+            count = await page.evaluate(script, aggressive)
             total_handled += count
             if count == 0:
                 break
@@ -754,7 +819,7 @@ async def _clear_blocking_overlays(page) -> int:
 
         for frame in page.frames:
             try:
-                count = await frame.evaluate(script)
+                count = await frame.evaluate(script, aggressive)
                 total_handled += count
             except Exception:
                 continue
@@ -767,13 +832,16 @@ async def _clear_blocking_overlays(page) -> int:
         return total_handled
 
 
-async def _find_locator(page, selector: str, timeout_ms: int = 30000):
+async def _find_locator(page, selector: str, timeout_ms: int = 60000):
     deadline = monotonic() + timeout_ms / 1000
+    misses = 0
     while monotonic() < deadline:
+        await _clear_blocking_overlays(page, aggressive=misses >= 4)
         page_locator = page.locator(selector)
         try:
-            if await page_locator.count() > 0:
-                return page_locator.first
+            visible = await _first_visible_locator(page_locator)
+            if visible:
+                return visible
         except Exception:
             await page.wait_for_timeout(500)
             continue
@@ -781,13 +849,52 @@ async def _find_locator(page, selector: str, timeout_ms: int = 30000):
         for frame in page.frames:
             frame_locator = frame.locator(selector)
             try:
-                if await frame_locator.count() > 0:
-                    return frame_locator.first
+                visible = await _first_visible_locator(frame_locator)
+                if visible:
+                    return visible
             except Exception:
                 continue
 
+        misses += 1
         await page.wait_for_timeout(500)
     raise CollectorError(f"找不到页面元素：{selector}")
+
+
+async def _first_visible_locator(locator, *, limit: int = 50):
+    count = await locator.count()
+    for index in range(min(count, limit)):
+        item = locator.nth(index)
+        try:
+            if await item.is_visible() and await _locator_is_really_visible(item):
+                return item
+        except Exception:
+            continue
+    return None
+
+
+async def _locator_is_really_visible(locator) -> bool:
+    return bool(
+        await locator.evaluate(
+            """
+            (element) => {
+              for (let node = element; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentElement) {
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                if (
+                  style.display === 'none'
+                  || style.visibility === 'hidden'
+                  || Number(style.opacity || '1') === 0
+                  || rect.width <= 0
+                  || rect.height <= 0
+                ) {
+                  return false;
+                }
+              }
+              return true;
+            }
+            """
+        )
+    )
 
 
 async def _save_debug_artifacts(page, job: CollectorJob, logs_dir: Path) -> None:

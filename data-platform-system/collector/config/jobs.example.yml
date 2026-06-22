@@ -7,15 +7,18 @@ jobs:
     report_page_url: "https://e.dianping.com/app/merchant-platform/0fb1bec0bade47d?iUrl=Ly9oNS5kaWFucGluZy5jb20vdmctcGMtYWR2aWNlL3JlcG9ydC1jZW50ZXIvaW5kZXguaHRtbA"
     download_mode: direct
     steps:
-      - action: js_click
-        selector: "button[data-click-bid='b_cbg_x7daorvu_mc']:has-text('使用模板')"
+      - action: wait
+        seconds: 8
+      - action: click
+        selector: "button.card-button"
       - action: wait
         seconds: 2
       - action: click
         selector: ".download-modal .mtd-date-picker-editor"
       - action: wait
         seconds: 1
-      - action: click_target_date_range
+      - action: click
+        selector: ".mtd-picker-panel-shortcut:has-text('昨天')"
       - action: wait
         seconds: 4
     download_selector: "button[data-click-bid='b_cbg_o9nfc94x_mc']:has-text('下载')"
@@ -34,6 +37,8 @@ jobs:
     download_mode: task_center
     task_name_template: "douyin_daily_{target_date:%Y%m%d}_{now:%H%M%S}"
     steps:
+      - action: wait
+        seconds: 8
       - action: click
         selector: ".byted-tab-bar-item:has-text('门店')"
       - action: click
