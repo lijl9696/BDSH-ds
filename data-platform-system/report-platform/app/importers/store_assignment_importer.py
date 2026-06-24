@@ -16,6 +16,8 @@ AREA_SHEET = "区域配置"
 STORE_SHEET = "门店配置"
 
 AREA_COLUMNS = {
+    "platform_code": ("平台", "platform", "platform_code", "平台代码"),
+    "store_code": ("门店编码", "门店ID", "store_code", "store_id"),
     "province": ("所在省份", "省份"),
     "city": ("所在城市", "城市"),
     "store_name": ("门店名", "门店名称", "店铺名称"),
@@ -43,13 +45,10 @@ def import_store_assignments(db: Session, path: Path) -> dict[str, int]:
     _ensure_area_assignment_schema(db)
     sheets = _read_workbook(path)
     area_df = _sheet(sheets, AREA_SHEET)
-    area_columns = _resolve_columns(area_df, AREA_COLUMNS, AREA_SHEET, optional={"store_name", "store_type"})
+    area_columns = _resolve_columns(area_df, AREA_COLUMNS, AREA_SHEET, optional={"platform_code", "store_code", "store_name", "store_type"})
 
     area_lookup, area_stats = _import_areas(db, area_df, area_columns)
-    store_stats = {"upserted": 0, "updated_stores": 0, "warnings": 0}
-    # 门店配置 sheet 暂不启用。
-    # 现在以平台报表导入的门店名称/省份/城市为准，再通过区域配置按“所在省份+所在城市”
-    # 自动匹配大区和负责人。保留 STORE_COLUMNS / _import_stores 代码，后续如需精确到门店覆盖时再开启。
+    store_stats = _import_confirmed_store_rows(db, area_df, area_columns)
     updated_stores = sync_stores_from_area_assignments(db)
     db.commit()
 
@@ -101,6 +100,53 @@ def _import_areas(db: Session, df: pd.DataFrame, columns: dict[str, str]) -> tup
             db.add(AreaAssignment(province=province, city=city, store_name=store_name, store_type=store_type, region=region, owner=owner))
         upserted += 1
     return lookup, {"upserted": upserted, "warnings": warnings}
+
+
+def _import_confirmed_store_rows(db: Session, df: pd.DataFrame, columns: dict[str, str]) -> dict[str, int]:
+    updated_stores = 0
+    warnings = 0
+    for _, row in df.iterrows():
+        store_code = clean_text(row.get(columns["store_code"])) if "store_code" in columns else ""
+        store_name = clean_text(row.get(columns["store_name"])) if "store_name" in columns else ""
+        province = clean_text(row.get(columns["province"]))
+        city = clean_text(row.get(columns["city"]))
+        store_type = normalize_store_type(row.get(columns["store_type"])) if "store_type" in columns else "all"
+        region = clean_text(row.get(columns["region"]))
+        owner = clean_text(row.get(columns["owner"]))
+        if not region or not owner or not (store_code or store_name):
+            continue
+
+        stores = _confirmed_store_candidates(db, store_code=store_code, store_name=store_name, province=province, city=city)
+        if not stores:
+            warnings += 1
+            continue
+        for store in stores:
+            if store_type != "all":
+                store.store_type = store_type
+            store.region = region
+            store.owner = owner
+            store.assignment_status = "confirmed"
+            store.assignment_source = "manual_export"
+            store.assignment_confidence = 100
+            store.assignment_note = "导出表人工维护后回传确认"
+            updated_stores += 1
+    return {"upserted": 0, "updated_stores": updated_stores, "warnings": warnings}
+
+
+def _confirmed_store_candidates(db: Session, *, store_code: str, store_name: str, province: str, city: str) -> list[Store]:
+    if store_code:
+        store = db.query(Store).filter(Store.store_code == store_code).first()
+        return [store] if store else []
+    if not store_name:
+        return []
+    query = db.query(Store).filter(Store.name == store_name)
+    if city:
+        query = query.filter(Store.city.in_(_city_candidates(city)))
+    candidates = query.all()
+    if province:
+        target_key = assignment_key(province, city, store_name)
+        candidates = [store for store in candidates if assignment_key(store.province, store.city, store.name) == target_key]
+    return candidates
 
 
 def _import_stores(

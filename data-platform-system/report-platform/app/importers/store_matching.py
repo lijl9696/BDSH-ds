@@ -56,7 +56,7 @@ def infer_store_type(store: Store) -> str:
 
 
 def apply_store_assignment(db: Session, *, platform_code: str, store: Store, preserve_manual: bool = True) -> AssignmentResult:
-    if preserve_manual and store.assignment_status == "confirmed" and store.assignment_source == "manual_store":
+    if preserve_manual and store.assignment_status == "confirmed" and store.assignment_source in {"manual_store", "manual_export"}:
         return AssignmentResult("confirmed", "manual_store", 100, "人工确认配置")
     if not store.province or not store.city:
         return _mark(store, "unconfigured", "missing_location", 0, "缺少省份或城市，无法匹配大区负责人")
