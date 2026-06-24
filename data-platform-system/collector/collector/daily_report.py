@@ -40,30 +40,52 @@ class RegionSummary:
 class DailyReportData:
     report_date: date
     platform_code: str
-    rows: list[RegionSummary]
+    yesterday_rows: list[RegionSummary]
+    month_rows: list[RegionSummary]
+
+    @property
+    def month_start(self) -> date:
+        return self.report_date.replace(day=1)
+
+    @property
+    def rows(self) -> list[RegionSummary]:
+        return self.yesterday_rows
 
     @property
     def total_paid_amount(self) -> Decimal:
-        return sum((row.paid_amount for row in self.rows), Decimal("0"))
+        return _total_paid_amount(self.yesterday_rows)
 
     @property
     def total_verified_amount(self) -> Decimal:
-        return sum((row.verified_amount for row in self.rows), Decimal("0"))
+        return _total_verified_amount(self.yesterday_rows)
 
     @property
     def total_verified_count(self) -> Decimal:
-        return sum((row.verified_count for row in self.rows), Decimal("0"))
+        return _total_verified_count(self.yesterday_rows)
 
     @property
     def total_verified_new_customer_count(self) -> Decimal:
-        return sum((row.verified_new_customer_count for row in self.rows), Decimal("0"))
+        return _total_verified_new_customer_count(self.yesterday_rows)
 
     @property
     def total_positive_review_count(self) -> Decimal:
-        return sum((row.positive_review_count for row in self.rows), Decimal("0"))
+        return _total_positive_review_count(self.yesterday_rows)
 
 
 def fetch_daily_region_report(settings: Settings, report_date: date, platform_code: str = "meituan") -> DailyReportData:
+    month_start = report_date.replace(day=1)
+    with psycopg.connect(settings.database_url) as connection:
+        yesterday_rows = _fetch_region_rows(connection, report_date, report_date, platform_code)
+        month_rows = _fetch_region_rows(connection, month_start, report_date, platform_code)
+    return DailyReportData(
+        report_date=report_date,
+        platform_code=platform_code,
+        yesterday_rows=yesterday_rows,
+        month_rows=month_rows,
+    )
+
+
+def _fetch_region_rows(connection, start_date: date, end_date: date, platform_code: str) -> list[RegionSummary]:
     query = """
     SELECT
       COALESCE(stores.region, '未配置') AS region,
@@ -77,28 +99,26 @@ def fetch_daily_region_report(settings: Settings, report_date: date, platform_co
     LEFT JOIN stores ON stores.store_code = metric_values.store_code
     WHERE metric_values.is_active = TRUE
       AND metric_values.platform_code = %s
-      AND metric_values.metric_date = %s
+      AND metric_values.metric_date BETWEEN %s AND %s
       AND metric_values.metric_code = ANY(%s)
       AND COALESCE(stores.region, '未配置') = ANY(%s)
     GROUP BY COALESCE(stores.region, '未配置')
     ORDER BY verified_amount DESC, paid_amount DESC, region ASC;
     """
-    with psycopg.connect(settings.database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, (platform_code, report_date, list(METRIC_CODES), list(REPORT_REGIONS)))
-            rows = [
-                RegionSummary(
-                    region=str(row[0]),
-                    owner=str(row[1]),
-                    paid_amount=_decimal(row[2]),
-                    verified_amount=_decimal(row[3]),
-                    verified_count=_decimal(row[4]),
-                    verified_new_customer_count=_decimal(row[5]),
-                    positive_review_count=_decimal(row[6]),
-                )
-                for row in cursor.fetchall()
-            ]
-    return DailyReportData(report_date=report_date, platform_code=platform_code, rows=rows)
+    with connection.cursor() as cursor:
+        cursor.execute(query, (platform_code, start_date, end_date, list(METRIC_CODES), list(REPORT_REGIONS)))
+        return [
+            RegionSummary(
+                region=str(row[0]),
+                owner=str(row[1]),
+                paid_amount=_decimal(row[2]),
+                verified_amount=_decimal(row[3]),
+                verified_count=_decimal(row[4]),
+                verified_new_customer_count=_decimal(row[5]),
+                positive_review_count=_decimal(row[6]),
+            )
+            for row in cursor.fetchall()
+        ]
 
 
 def render_daily_region_report(
@@ -114,11 +134,25 @@ def render_daily_region_report(
     margin = 44
     card_gap = 18
     header_h = 188
-    summary_h = 156
+    summary_h = 132
+    section_title_h = 34
     table_header_h = 58
-    row_h = 52
-    table_h = table_header_h + max(1, len(report.rows)) * row_h
-    height = margin * 2 + header_h + card_gap + summary_h + card_gap + table_h + 26
+    row_h = 48
+    yesterday_table_h = section_title_h + table_header_h + max(1, len(report.yesterday_rows)) * row_h
+    month_table_h = section_title_h + table_header_h + max(1, len(report.month_rows)) * row_h
+    height = (
+        margin * 2
+        + header_h
+        + card_gap
+        + summary_h
+        + card_gap
+        + summary_h
+        + card_gap
+        + yesterday_table_h
+        + card_gap
+        + month_table_h
+        + 26
+    )
 
     fonts = _load_fonts(font_path, scale=scale)
     s = lambda value: int(round(value * scale))
@@ -136,78 +170,66 @@ def render_daily_region_report(
 
     title_x = margin + 16
     title = "彭世修脚团购日报"
-    subtitle = f"{_platform_name(report.platform_code)} | {report.report_date:%Y-%m-%d} | 大区汇总"
+    subtitle = (
+        f"{_platform_name(report.platform_code)} | {report.report_date:%Y-%m-%d} | "
+        f"本月累计 {report.month_start:%m.%d}-{report.report_date:%m.%d}"
+    )
     draw.text((s(title_x), s(margin + 32)), title, font=fonts["title"], fill="#ffffff")
     draw.rounded_rectangle(box((title_x, margin + 96, title_x + 86, margin + 105)), radius=s(5), fill=brand_yellow)
     draw.text((s(title_x), s(margin + 122)), subtitle, font=fonts["body"], fill="#f7fbff")
 
     y = margin + header_h + card_gap
-    _draw_top_accent_card(
+    _draw_summary_card(
         image,
-        box((margin, y, width - margin, y + summary_h)),
-        radius=s(22),
-        accent_h=s(14),
-        accent_fill=brand_yellow,
-        body_fill="#ffffff",
+        draw,
+        box,
+        s,
+        fonts,
+        (margin, y, width - margin, y + summary_h),
+        "昨日汇总数据",
+        _summary_items(report.yesterday_rows),
+        brand_yellow,
     )
-    summary_items = [
-        ("下单金额", _money(report.total_paid_amount)),
-        ("核销金额", _money(report.total_verified_amount)),
-        ("核销订单数", _number(report.total_verified_count)),
-        ("好评数", _number(report.total_positive_review_count)),
-    ]
-    item_w = (width - margin * 2 - 48) / len(summary_items)
-    for index, (label, value) in enumerate(summary_items):
-        x = margin + 24 + index * item_w
-        if index:
-            draw.line(box((x - 16, y + 34, x - 16, y + summary_h - 34)), fill="#e6ecfa", width=s(2))
-        draw.text((s(x), s(y + 30)), label, font=fonts["small"], fill="#52617d")
-        draw.text((s(x), s(y + 76)), value, font=fonts["metric"], fill="#07142f")
     y += summary_h + card_gap
-    draw.rounded_rectangle(box((margin, y, width - margin, y + table_h)), radius=s(22), fill="#ffffff")
-    columns = [
-        ("大区", 120),
-        ("负责人", 180),
-        ("下单金额", 145),
-        ("核销金额", 145),
-        ("核销订单数", 135),
-        ("核销新客数", 135),
-        ("好评数", 115),
-        ("好评率", 115),
-    ]
-    x = margin + 24
-    header_y = y + 18
-    draw.rounded_rectangle(box((margin + 14, y + 12, width - margin - 14, y + table_header_h - 6)), radius=s(14), fill="#eef4ff")
-    for label, col_w in columns:
-        draw.text((s(x), s(header_y)), label, font=fonts["table_header"], fill=deep_blue)
-        x += col_w
-
-    if not report.rows:
-        draw.text((s(margin + 24), s(y + table_header_h + 28)), "暂无数据", font=fonts["body"], fill="#53607a")
-    else:
-        for row_index, row in enumerate(report.rows):
-            row_y = y + table_header_h + row_index * row_h
-            if row_index % 2 == 1:
-                draw.rounded_rectangle(box((margin + 14, row_y + 4, width - margin - 14, row_y + row_h - 4)), radius=s(10), fill="#f4f7ff")
-            values = [
-                row.region,
-                row.owner,
-                _money(row.paid_amount),
-                _money(row.verified_amount),
-                _number(row.verified_count),
-                _number(row.verified_new_customer_count),
-                _number(row.positive_review_count),
-                _rate(row.positive_review_count, row.verified_count),
-            ]
-            x = margin + 24
-            for (label, col_w), value in zip(columns, values):
-                draw.text(
-                    (s(x), s(row_y + 13)),
-                    _fit_text(draw, value, fonts["table"], s(col_w - 12)),
-                    font=fonts["table"],
-                    fill="#101828",
-                )
-                x += col_w
+    _draw_summary_card(
+        image,
+        draw,
+        box,
+        s,
+        fonts,
+        (margin, y, width - margin, y + summary_h),
+        "本月累计汇总数据",
+        _summary_items(report.month_rows),
+        brand_yellow,
+    )
+    y += summary_h + card_gap
+    _draw_region_table(
+        draw,
+        box,
+        s,
+        fonts,
+        (margin, y, width - margin, y + yesterday_table_h),
+        "昨日大区数据",
+        report.yesterday_rows,
+        deep_blue,
+        section_title_h,
+        table_header_h,
+        row_h,
+    )
+    y += yesterday_table_h + card_gap
+    _draw_region_table(
+        draw,
+        box,
+        s,
+        fonts,
+        (margin, y, width - margin, y + month_table_h),
+        "本月累计大区数据",
+        report.month_rows,
+        deep_blue,
+        section_title_h,
+        table_header_h,
+        row_h,
+    )
 
     image = image.resize((width, height), Image.Resampling.LANCZOS)
     image.save(output_path, "PNG", optimize=True)
@@ -248,6 +270,35 @@ def _rate(numerator: Decimal, denominator: Decimal) -> str:
     if not denominator:
         return "0.00%"
     return f"{float(numerator / denominator * 100):.2f}%"
+
+
+def _total_paid_amount(rows: list[RegionSummary]) -> Decimal:
+    return sum((row.paid_amount for row in rows), Decimal("0"))
+
+
+def _total_verified_amount(rows: list[RegionSummary]) -> Decimal:
+    return sum((row.verified_amount for row in rows), Decimal("0"))
+
+
+def _total_verified_count(rows: list[RegionSummary]) -> Decimal:
+    return sum((row.verified_count for row in rows), Decimal("0"))
+
+
+def _total_verified_new_customer_count(rows: list[RegionSummary]) -> Decimal:
+    return sum((row.verified_new_customer_count for row in rows), Decimal("0"))
+
+
+def _total_positive_review_count(rows: list[RegionSummary]) -> Decimal:
+    return sum((row.positive_review_count for row in rows), Decimal("0"))
+
+
+def _summary_items(rows: list[RegionSummary]) -> list[tuple[str, str]]:
+    return [
+        ("下单金额", _money(_total_paid_amount(rows))),
+        ("核销金额", _money(_total_verified_amount(rows))),
+        ("核销订单数", _number(_total_verified_count(rows))),
+        ("好评数", _number(_total_positive_review_count(rows))),
+    ]
 
 
 def _platform_name(platform_code: str) -> str:
@@ -316,6 +367,99 @@ def _draw_top_accent_card(
     image.paste(layer, (x1, y1), layer)
 
 
+def _draw_summary_card(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    box,
+    s,
+    fonts,
+    rect: tuple[int, int, int, int],
+    title: str,
+    items: list[tuple[str, str]],
+    brand_yellow: str,
+) -> None:
+    x1, y1, x2, y2 = rect
+    _draw_top_accent_card(
+        image,
+        box(rect),
+        radius=s(22),
+        accent_h=s(14),
+        accent_fill=brand_yellow,
+        body_fill="#ffffff",
+    )
+    draw.text((s(x1 + 24), s(y1 + 28)), title, font=fonts["small"], fill="#0826b8")
+    item_w = (x2 - x1 - 48) / len(items)
+    for index, (label, value) in enumerate(items):
+        x = x1 + 24 + index * item_w
+        if index:
+            draw.line(box((x - 16, y1 + 48, x - 16, y2 - 28)), fill="#e6ecfa", width=s(2))
+        draw.text((s(x), s(y1 + 58)), label, font=fonts["small"], fill="#52617d")
+        draw.text((s(x), s(y1 + 91)), value, font=fonts["metric"], fill="#07142f")
+
+
+def _draw_region_table(
+    draw: ImageDraw.ImageDraw,
+    box,
+    s,
+    fonts,
+    rect: tuple[int, int, int, int],
+    title: str,
+    rows: list[RegionSummary],
+    deep_blue: str,
+    section_title_h: int,
+    table_header_h: int,
+    row_h: int,
+) -> None:
+    x1, y1, x2, y2 = rect
+    draw.rounded_rectangle(box(rect), radius=s(22), fill="#ffffff")
+    draw.text((s(x1 + 24), s(y1 + 12)), title, font=fonts["section"], fill="#07142f")
+
+    columns = [
+        ("大区", 120),
+        ("负责人", 180),
+        ("下单金额", 145),
+        ("核销金额", 145),
+        ("核销订单数", 135),
+        ("核销新客数", 135),
+        ("好评数", 115),
+        ("好评率", 115),
+    ]
+    header_y = y1 + section_title_h
+    draw.rounded_rectangle(box((x1 + 14, header_y + 8, x2 - 14, header_y + table_header_h - 8)), radius=s(14), fill="#eef4ff")
+    x = x1 + 24
+    for label, col_w in columns:
+        draw.text((s(x), s(header_y + 18)), label, font=fonts["table_header"], fill=deep_blue)
+        x += col_w
+
+    if not rows:
+        draw.text((s(x1 + 24), s(header_y + table_header_h + 24)), "暂无数据", font=fonts["body"], fill="#53607a")
+        return
+
+    for row_index, row in enumerate(rows):
+        row_y = header_y + table_header_h + row_index * row_h
+        if row_index % 2 == 1:
+            draw.rounded_rectangle(box((x1 + 14, row_y + 4, x2 - 14, row_y + row_h - 4)), radius=s(10), fill="#f4f7ff")
+        values = [
+            row.region,
+            row.owner,
+            _money(row.paid_amount),
+            _money(row.verified_amount),
+            _number(row.verified_count),
+            _number(row.verified_new_customer_count),
+            _number(row.positive_review_count),
+            _rate(row.positive_review_count, row.verified_count),
+        ]
+        x = x1 + 24
+        for (label, col_w), value in zip(columns, values):
+            draw.text(
+                (s(x), s(row_y + 11)),
+                _fit_text(draw, value, fonts["table"], s(col_w - 12)),
+                font=fonts["table"],
+                fill="#101828",
+            )
+            x += col_w
+
+
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
     return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))
@@ -353,6 +497,7 @@ def _load_fonts(font_path: str | None, *, scale: int = 1) -> dict[str, ImageFont
         "metric": font(31, use_bold=True),
         "body": font(22, use_bold=True),
         "small": font(18, use_bold=True),
+        "section": font(21, use_bold=True),
         "table_header": font(20, use_bold=True),
         "table": font(19, use_bold=True),
     }
