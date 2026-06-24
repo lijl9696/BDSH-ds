@@ -488,6 +488,8 @@
 	          </div>
 	          <div class="config-actions">
 	            <button id="storeConfigLoad" type="button">查询</button>
+	            <button id="storeConfigExport" class="secondary" type="button">导出当前筛选</button>
+	            <button id="storeConfigExportAll" class="secondary" type="button">导出全部门店</button>
 	            <button id="storeConfigReapply" class="secondary" type="button">重新匹配</button>
 	          </div>
 	        </div>
@@ -513,6 +515,8 @@
 	      const storeConfigRegionFilter = document.querySelector("#storeConfigRegionFilter");
 	      const storeConfigSearch = document.querySelector("#storeConfigSearch");
 	      const storeConfigLoad = document.querySelector("#storeConfigLoad");
+	      const storeConfigExport = document.querySelector("#storeConfigExport");
+	      const storeConfigExportAll = document.querySelector("#storeConfigExportAll");
 	      const storeConfigReapply = document.querySelector("#storeConfigReapply");
 	      const storeConfigList = document.querySelector("#storeConfigList");
 	      const dashboardLink = document.querySelector("#dashboardLink");
@@ -582,6 +586,18 @@
 	      });
 
 	      storeConfigLoad.addEventListener("click", loadStoreConfigRows);
+
+	      storeConfigExport.addEventListener("click", () => {
+	        const params = storeConfigFilterParams();
+	        params.set("limit", "10000");
+	        window.location.href = `/store-config/stores/export?${params.toString()}`;
+	      });
+
+	      storeConfigExportAll.addEventListener("click", () => {
+	        const params = new URLSearchParams();
+	        params.set("limit", "10000");
+	        window.location.href = `/store-config/stores/export?${params.toString()}`;
+	      });
 
 	      storeConfigReapply.addEventListener("click", async () => {
 	        storeConfigStatus.textContent = "正在按最新配置重新匹配门店...";
@@ -705,11 +721,7 @@
 	      }
 
 	      async function loadStoreConfigRows() {
-	        const params = new URLSearchParams();
-	        appendParam(params, "status", storeConfigStatusFilter.value);
-	        appendParam(params, "city", storeConfigCityFilter.value.trim());
-	        appendParam(params, "region", storeConfigRegionFilter.value.trim());
-	        appendParam(params, "q", storeConfigSearch.value.trim());
+	        const params = storeConfigFilterParams();
 	        params.set("limit", "200");
 	        storeConfigList.className = "config-table-wrap empty";
 	        storeConfigList.textContent = "正在加载门店...";
@@ -724,6 +736,15 @@
 
 	      function appendParam(params, name, value) {
 	        if (value) params.set(name, value);
+	      }
+
+	      function storeConfigFilterParams() {
+	        const params = new URLSearchParams();
+	        appendParam(params, "status", storeConfigStatusFilter.value);
+	        appendParam(params, "city", storeConfigCityFilter.value.trim());
+	        appendParam(params, "region", storeConfigRegionFilter.value.trim());
+	        appendParam(params, "q", storeConfigSearch.value.trim());
+	        return params;
 	      }
 
 	      function renderStoreConfigRows(items) {
