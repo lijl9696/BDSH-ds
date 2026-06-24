@@ -13,6 +13,7 @@ class Settings:
     report_web_base_url: str
     import_auth_username: str
     import_auth_password: str
+    database_url: str
     jobs_path: Path
     downloads_dir: Path
     state_dir: Path
@@ -22,6 +23,10 @@ class Settings:
     browser_user_data_dir: Path | None
     browser_cdp_url: str | None
     timezone: str
+    wecom_webhook_url: str | None
+    daily_report_cron: str | None
+    report_font_path: str | None
+    report_logo_path: str | None
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,7 @@ def load_settings() -> Settings:
         report_web_base_url=os.getenv("REPORT_WEB_BASE_URL", "http://report-web:8000").rstrip("/"),
         import_auth_username=os.getenv("IMPORT_AUTH_USERNAME", "admin"),
         import_auth_password=os.getenv("IMPORT_AUTH_PASSWORD", ""),
+        database_url=os.getenv("DATABASE_URL", "postgresql://tg_report:tg_report@postgres:5432/tg_report"),
         jobs_path=Path(os.getenv("COLLECTOR_JOBS_PATH", "/app/config/jobs.yml")),
         downloads_dir=Path(os.getenv("COLLECTOR_DOWNLOADS_DIR", "/app/downloads")),
         state_dir=Path(os.getenv("COLLECTOR_STATE_DIR", "/app/state")),
@@ -83,6 +89,10 @@ def load_settings() -> Settings:
         ),
         browser_cdp_url=os.getenv("COLLECTOR_BROWSER_CDP_URL") or None,
         timezone=os.getenv("COLLECTOR_TIMEZONE", "Asia/Shanghai"),
+        wecom_webhook_url=os.getenv("WECOM_WEBHOOK_URL") or None,
+        daily_report_cron=os.getenv("WECOM_DAILY_REPORT_CRON", "30 8 * * *") or None,
+        report_font_path=os.getenv("WECOM_REPORT_FONT_PATH") or None,
+        report_logo_path=os.getenv("WECOM_REPORT_LOGO_PATH") or None,
     )
 
 

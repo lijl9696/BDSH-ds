@@ -255,8 +255,7 @@ async def _download_report(
 
     try:
         async with page.expect_download(timeout=job.download_timeout_seconds * 1000) as download_info:
-            locator = await _find_locator(page, job.download_selector)
-            await _click_locator(page, locator)
+            await _click_download_button(page, job.download_selector)
         download = await download_info.value
     except PlaywrightTimeoutError as exc:
         raise CollectorError(f"{job.code} 下载超时，请检查下载中心选择器或登录态。") from exc
@@ -366,6 +365,9 @@ async def _run_step(
         locator = await _find_locator(page, selector)
         await _click_locator(page, locator)
         return
+    if step.action == "ensure_meituan_all_shops":
+        await _ensure_meituan_all_shops(page)
+        return
     if step.action == "click_form_control_by_label":
         if not value:
             raise CollectorError("click_form_control_by_label step 缺少 value")
@@ -445,10 +447,55 @@ async def _js_click_locator(page, locator) -> None:
     )
 
 
+async def _click_download_button(page, selector: str) -> None:
+    """Click the active download button without treating the download modal as a stray overlay."""
+    deadline = monotonic() + 30
+    while monotonic() < deadline:
+        try:
+            locator = page.locator(selector)
+            visible = await _first_visible_locator(locator, limit=10)
+            if visible:
+                await visible.click(timeout=5000)
+                return
+        except Exception:
+            pass
+
+        for context in [page, *page.frames]:
+            try:
+                clicked = await context.evaluate(
+                    """
+                    () => {
+                      const modal = Array.from(document.querySelectorAll('.download-modal, .mtd-modal'))
+                        .find((element) => element.innerText.includes('日全数据下载'));
+                      const root = modal || document;
+                      const button = root.querySelector('button[data-click-bid="b_cbg_o9nfc94x_mc"]')
+                        || Array.from(root.querySelectorAll('button'))
+                          .find((element) => !String(element.className || '').includes('disabled')
+                            && (element.innerText || '').trim() === '下载');
+                      if (!button) return false;
+                      button.scrollIntoView({ block: 'center', inline: 'center' });
+                      const options = { bubbles: true, cancelable: true, view: window };
+                      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                        button.dispatchEvent(new MouseEvent(type, options));
+                      }
+                      button.click();
+                      return true;
+                    }
+                    """
+                )
+                if clicked:
+                    return
+            except Exception:
+                continue
+
+        await page.wait_for_timeout(500)
+
+    raise CollectorError(f"找不到下载按钮：{selector}")
+
+
 async def _click_form_control_by_label(page, label_text: str) -> None:
     await _clear_blocking_overlays(page)
-    clicked = await page.evaluate(
-        """
+    script = """
         (labelText) => {
           const visible = (element) => {
             const rect = element.getBoundingClientRect();
@@ -457,23 +504,100 @@ async def _click_form_control_by_label(page, label_text: str) -> None:
           };
           const labels = Array.from(document.querySelectorAll('label, .byted-form-container-label, .mtd-form-item-label'))
             .filter((element) => (element.innerText || '').trim().includes(labelText));
+          const fireClick = (element) => {
+            element.scrollIntoView({ block: 'center', inline: 'center' });
+            const options = { bubbles: true, cancelable: true, view: window };
+            for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+              element.dispatchEvent(new MouseEvent(type, options));
+            }
+            element.click();
+          };
           for (const label of labels) {
             const container = label.closest('.byted-form-container, .mtd-form-item, .form-item') || label.parentElement;
             if (!container) continue;
+            const preferredInput = Array.from(container.querySelectorAll('input'))
+              .find((input) => visible(input) && String(input.getAttribute('placeholder') || '').includes('时间'));
+            if (preferredInput) {
+              const wrapper = preferredInput.closest(
+                '[class*="date"], [class*="Date"], [class*="picker"], [class*="Picker"], [class*="input"], [class*="Input"]'
+              ) || preferredInput;
+              fireClick(wrapper);
+              fireClick(preferredInput);
+              return true;
+            }
             const candidates = Array.from(container.querySelectorAll('input, button, [class*="picker"], [class*="input"]'))
               .filter((element) => element !== label && visible(element));
             for (const element of candidates) {
-              element.click();
+              fireClick(element);
               return true;
             }
           }
           return false;
         }
-        """,
-        label_text,
-    )
-    if not clicked:
-        raise CollectorError(f"找不到表单项：{label_text}")
+        """
+    for context in [page, *page.frames]:
+        try:
+            if await context.evaluate(script, label_text):
+                await page.wait_for_timeout(500)
+                return
+        except Exception:
+            continue
+    raise CollectorError(f"找不到表单项：{label_text}")
+
+
+async def _ensure_meituan_all_shops(page) -> None:
+    """Switch Meituan top-left shop selector to all shops without generic overlay cleanup."""
+    shop = page.locator("#shopName").first
+    try:
+        current = (await shop.inner_text(timeout=5000)).strip()
+    except Exception as exc:
+        raise CollectorError("找不到美团门店选择器 #shopName") from exc
+    if "全部门店" in current:
+        return
+
+    for attempt in range(3):
+        await shop.click(force=True, timeout=5000)
+        await page.wait_for_timeout(1000)
+        try:
+            clicked = await page.evaluate(
+                """
+                () => {
+                  const matches = Array.from(document.querySelectorAll('body *'))
+                    .filter((element) => (element.innerText || '').trim() === '全部门店');
+                  const option = matches.find((element) =>
+                    String(element.className || '').includes('shop-item')
+                    || element.closest('.shop-item, .slot-item')
+                  );
+                  if (!option) return false;
+                  const target = option.closest('.shop-item, .slot-item') || option;
+                  const events = { bubbles: true, cancelable: true, view: window };
+                  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                    target.dispatchEvent(new MouseEvent(type, events));
+                  }
+                  target.click();
+                  return true;
+                }
+                """
+            )
+            if clicked:
+                await page.wait_for_timeout(1000)
+                confirm = page.locator("button:has-text('确定')").first
+                if await confirm.count():
+                    try:
+                        if await confirm.is_visible(timeout=1000):
+                            await confirm.click(force=True, timeout=3000)
+                            await page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
+                current = (await shop.inner_text(timeout=5000)).strip()
+                if "全部门店" in current:
+                    return
+        except Exception:
+            logging.info("切换全部门店重试 attempt=%s", attempt + 1)
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(500)
+
+    raise CollectorError("无法切换到全部门店")
 
 
 async def _click_target_date_range(page, target_date) -> None:
@@ -481,53 +605,70 @@ async def _click_target_date_range(page, target_date) -> None:
     if await _confirm_target_date_if_selected(page, target_date):
         return
     for _ in range(2):
-        clicked = await page.evaluate(
-            """
-            ({ year, month, day }) => {
-              const isVisible = (element) => {
-                const style = window.getComputedStyle(element);
-                const rect = element.getBoundingClientRect();
-                return style.visibility !== 'hidden'
-                  && style.display !== 'none'
-                  && rect.width > 0
-                  && rect.height > 0;
-              };
-              const isDisabled = (element) => {
-                for (let node = element; node && node !== document.body; node = node.parentElement) {
-                  const className = String(node.className || '');
-                  if (className.includes('disabled') || className.includes('forbidden')) {
-                    return true;
-                  }
-                }
-                return false;
-              };
-              const headerText = `${year}年 ${month}月`;
-              const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
-                .filter((root) => root.innerText.includes(headerText));
-              const bytedRoots = Array.from(document.querySelectorAll('.byted-date-view, .byted-date-container, .byted-popover-wrapper'))
-                .filter((root) => root.innerText.includes(`${year}年`) || root.innerText.includes(`${month}月`) || root.innerText.includes(String(day)));
-              const roots = mtdRoots.length
-                ? mtdRoots
-                : (bytedRoots.length ? bytedRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, .byted-date-container, body')));
-              for (const root of roots) {
-                const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
-                  .filter((element) => element.innerText && element.innerText.trim() === String(day))
-                  .filter((element) => isVisible(element) && !isDisabled(element));
-                for (const element of candidates) {
-                  const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
-                  clickable.click();
-                  return true;
-                }
-              }
-              return false;
-            }
-            """,
-            {"year": target_date.year, "month": target_date.month, "day": target_date.day},
-        )
+        clicked = await _click_target_date_in_contexts(page, target_date)
         if not clicked:
             raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
         await page.wait_for_timeout(500)
     await _click_visible_button_text(page, "确认", required=False)
+
+
+async def _click_target_date_in_contexts(page, target_date) -> bool:
+    script = """
+    ({ year, month, day }) => {
+      const isVisible = (element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const isDisabled = (element) => {
+        for (let node = element; node && node !== document.body; node = node.parentElement) {
+          const className = String(node.className || '');
+          if (className.includes('disabled') || className.includes('forbidden')) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const fireClick = (element) => {
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        const options = { bubbles: true, cancelable: true, view: window };
+        for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+          element.dispatchEvent(new MouseEvent(type, options));
+        }
+        element.click();
+      };
+      const headerText = `${year}年 ${month}月`;
+      const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
+        .filter((root) => root.innerText.includes(headerText));
+      const bytedRoots = Array.from(document.querySelectorAll('.byted-date-view, .byted-date-container, .byted-popover-wrapper'))
+        .filter((root) => root.innerText.includes(`${year}年`) || root.innerText.includes(`${month}月`) || root.innerText.includes(String(day)));
+      const roots = mtdRoots.length
+        ? mtdRoots
+        : (bytedRoots.length ? bytedRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, .byted-date-container, body')));
+      for (const root of roots) {
+        const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
+          .filter((element) => element.innerText && element.innerText.trim() === String(day))
+          .filter((element) => isVisible(element) && !isDisabled(element));
+        for (const element of candidates) {
+          const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
+          fireClick(clickable);
+          return true;
+        }
+      }
+      return false;
+    }
+    """
+    payload = {"year": target_date.year, "month": target_date.month, "day": target_date.day}
+    for context in [page, *page.frames]:
+        try:
+            if await context.evaluate(script, payload):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _confirm_target_date_if_selected(page, target_date) -> bool:
@@ -645,6 +786,49 @@ async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
         }
       };
 
+      // 0. driver.js / 新手引导会跨 iframe 遮挡真实业务按钮，先强制移除。
+      // 这类浮层不是业务弹窗，保留反而会导致 iframe 内按钮“看得见但点不到”。
+      const forceRemoveGuideSelectors = [
+        '.driver-overlay',
+        '.driver-overlay-content',
+        '.driver-overlay-animated',
+        '.driver-popover',
+        '.driver-popover-wrapper',
+        '.driver-stage',
+        '.driver-highlighted-element',
+        '#driver-popover-content',
+        '#guide-notification-modal',
+        '.guide-custom-popover',
+        '.mtd-notification.custom-notification',
+        '.custom-notification',
+        '.mtd-notification[aria-controls="driver-popover-content"]',
+        '[aria-controls="driver-popover-content"]'
+      ];
+
+      for (const selector of forceRemoveGuideSelectors) {
+        for (const element of Array.from(document.querySelectorAll(selector))) {
+          try {
+            element.remove();
+            handled += 1;
+          } catch (_) {}
+        }
+      }
+      document.body?.classList.remove('driver-active', 'driver-fade', 'mtd-lock-scroll');
+      for (const element of Array.from(document.querySelectorAll('[class*="driver"], [class*="guide-"]'))) {
+        try {
+          if (element === document.body || element === document.documentElement) continue;
+          const text = safeText(element).slice(0, 1000);
+          const businessKeywords = [
+            '时间范围', '报表预览', '下载', '复制报表', '任务命名',
+            '统计周期', '汇总方式', '创建下载任务', '请输入任务名',
+            '昨天', '近7天', '近30天'
+          ];
+          if (businessKeywords.some((keyword) => text.includes(keyword))) continue;
+          element.remove();
+          handled += 1;
+        } catch (_) {}
+      }
+
       // 1. 先处理常见关闭按钮。这里尽量“点击关闭”，不直接 remove 业务弹窗。
       const closeSelectors = [
         '[aria-label="close"]',
@@ -739,7 +923,8 @@ async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
       const adKeywords = [
         '广告', '活动', '权益', '升级', '新功能', '新手引导', '引导',
         '立即体验', '立即开通', '去开通', '限时', '推荐使用',
-        '免费试用', '福利', '大促', '营销', '订购', '续费'
+        '免费试用', '福利', '大促', '营销', '订购', '续费',
+        '重点消息', '消息待查看', '行业资讯', '产品动态', '立即参与'
       ];
 
       const modalCandidates = Array.from(document.querySelectorAll([
@@ -865,7 +1050,7 @@ async def _first_visible_locator(locator, *, limit: int = 50):
     for index in range(min(count, limit)):
         item = locator.nth(index)
         try:
-            if await item.is_visible() and await _locator_is_really_visible(item):
+            if await _locator_is_really_visible(item):
                 return item
         except Exception:
             continue

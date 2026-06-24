@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from .browser_runner import download_job, run_job, save_login_state
 from .config import CollectorJob, load_jobs, load_settings
+from .daily_report import fetch_daily_region_report, render_daily_region_report, send_wecom_image
 
 
 def main() -> None:
@@ -21,8 +24,28 @@ def main() -> None:
     login_parser.add_argument("job_code")
     login_parser.add_argument("--login-url")
 
+    report_parser = subparsers.add_parser("daily-report", help="生成并可选推送大区汇总日报图片")
+    report_parser.add_argument("--date", help="日报日期，格式 YYYY-MM-DD；默认昨天")
+    report_parser.add_argument("--platform", default="meituan", help="平台编码，默认 meituan")
+    report_parser.add_argument("--output", help="输出 PNG 路径；默认写入日志目录")
+    report_parser.add_argument("--send", action="store_true", help="发送到企业微信机器人")
+
     args = parser.parse_args()
     settings = load_settings()
+    if args.command == "daily-report":
+        report_date = _parse_report_date(args.date)
+        output = Path(args.output) if args.output else settings.logs_dir / f"daily_region_report_{args.platform}_{report_date:%Y%m%d}.png"
+        report = fetch_daily_region_report(settings, report_date, args.platform)
+        image_path = render_daily_region_report(report, output, settings.report_font_path, settings.report_logo_path)
+        result = {"status": "generated", "path": str(image_path), "rows": len(report.rows)}
+        if args.send:
+            if not settings.wecom_webhook_url:
+                raise SystemExit("缺少 WECOM_WEBHOOK_URL，无法推送企业微信。")
+            result["wecom"] = send_wecom_image(settings.wecom_webhook_url, image_path)
+            result["status"] = "sent"
+        print(result)
+        return
+
     jobs = {job.code: job for job in load_jobs(settings.jobs_path)}
     job = jobs.get(args.job_code)
     if not job:
@@ -34,6 +57,12 @@ def main() -> None:
         print(asyncio.run(download_job(job, settings)))
     elif args.command == "login":
         print(asyncio.run(save_login_state(job, settings, args.login_url)))
+
+
+def _parse_report_date(value: str | None):
+    if value:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    return datetime.now().date() - timedelta(days=1)
 
 
 if __name__ == "__main__":
