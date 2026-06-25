@@ -21,6 +21,7 @@ METRIC_CODES = (
     "paid_amount",
     "verified_amount",
     "verified_count",
+    "verified_coupon_count",
     "verified_new_customer_count",
     "new_positive_review_count",
 )
@@ -101,7 +102,16 @@ def _fetch_region_rows(connection, start_date: date, end_date: date, platform_co
       COALESCE(NULLIF(string_agg(DISTINCT NULLIF(stores.owner, ''), '、'), ''), '未配置') AS owner,
       SUM(CASE WHEN metric_values.metric_code = 'paid_amount' THEN metric_values.value ELSE 0 END) AS paid_amount,
       SUM(CASE WHEN metric_values.metric_code = 'verified_amount' THEN metric_values.value ELSE 0 END) AS verified_amount,
-      SUM(CASE WHEN metric_values.metric_code = 'verified_count' THEN metric_values.value ELSE 0 END) AS verified_count,
+      -- Douyin exports coupon verification count but no order-count field.
+      SUM(
+        CASE
+          WHEN metric_values.platform_code = 'douyin' AND metric_values.metric_code = 'verified_coupon_count'
+            THEN metric_values.value
+          WHEN metric_values.platform_code <> 'douyin' AND metric_values.metric_code = 'verified_count'
+            THEN metric_values.value
+          ELSE 0
+        END
+      ) AS verified_count,
       SUM(CASE WHEN metric_values.metric_code = 'verified_new_customer_count' THEN metric_values.value ELSE 0 END) AS verified_new_customer_count,
       SUM(CASE WHEN metric_values.metric_code = 'new_positive_review_count' THEN metric_values.value ELSE 0 END) AS positive_review_count
     FROM metric_values
