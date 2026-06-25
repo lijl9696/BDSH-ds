@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import httpx
 import psycopg
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from playwright.sync_api import sync_playwright
 
 from .config import Settings
 
@@ -23,12 +26,16 @@ METRIC_CODES = (
 )
 
 REPORT_REGIONS = ("郑北", "郑中", "郑东")
+REPORT_PLATFORMS = ("meituan", "douyin")
 
 
 @dataclass(frozen=True)
 class RegionSummary:
     region: str
     owner: str
+    platform_code: str
+    platform_name: str
+    row_type: str
     paid_amount: Decimal
     verified_amount: Decimal
     verified_count: Decimal
@@ -72,7 +79,7 @@ class DailyReportData:
         return _total_positive_review_count(self.yesterday_rows)
 
 
-def fetch_daily_region_report(settings: Settings, report_date: date, platform_code: str = "meituan") -> DailyReportData:
+def fetch_daily_region_report(settings: Settings, report_date: date, platform_code: str = "all") -> DailyReportData:
     month_start = report_date.replace(day=1)
     with psycopg.connect(settings.database_url) as connection:
         yesterday_rows = _fetch_region_rows(connection, report_date, report_date, platform_code)
@@ -86,9 +93,11 @@ def fetch_daily_region_report(settings: Settings, report_date: date, platform_co
 
 
 def _fetch_region_rows(connection, start_date: date, end_date: date, platform_code: str) -> list[RegionSummary]:
+    platform_codes = list(REPORT_PLATFORMS) if platform_code in {"all", "combined", "multi"} else [platform_code]
     query = """
     SELECT
       COALESCE(stores.region, '未配置') AS region,
+      metric_values.platform_code AS platform_code,
       COALESCE(NULLIF(string_agg(DISTINCT NULLIF(stores.owner, ''), '、'), ''), '未配置') AS owner,
       SUM(CASE WHEN metric_values.metric_code = 'paid_amount' THEN metric_values.value ELSE 0 END) AS paid_amount,
       SUM(CASE WHEN metric_values.metric_code = 'verified_amount' THEN metric_values.value ELSE 0 END) AS verified_amount,
@@ -98,27 +107,31 @@ def _fetch_region_rows(connection, start_date: date, end_date: date, platform_co
     FROM metric_values
     LEFT JOIN stores ON stores.store_code = metric_values.store_code
     WHERE metric_values.is_active = TRUE
-      AND metric_values.platform_code = %s
+      AND metric_values.platform_code = ANY(%s)
       AND metric_values.metric_date BETWEEN %s AND %s
       AND metric_values.metric_code = ANY(%s)
       AND COALESCE(stores.region, '未配置') = ANY(%s)
-    GROUP BY COALESCE(stores.region, '未配置')
-    ORDER BY verified_amount DESC, paid_amount DESC, region ASC;
+    GROUP BY COALESCE(stores.region, '未配置'), metric_values.platform_code
+    ORDER BY region ASC, platform_code ASC;
     """
     with connection.cursor() as cursor:
-        cursor.execute(query, (platform_code, start_date, end_date, list(METRIC_CODES), list(REPORT_REGIONS)))
-        return [
+        cursor.execute(query, (platform_codes, start_date, end_date, list(METRIC_CODES), list(REPORT_REGIONS)))
+        detail_rows = [
             RegionSummary(
                 region=str(row[0]),
-                owner=str(row[1]),
-                paid_amount=_decimal(row[2]),
-                verified_amount=_decimal(row[3]),
-                verified_count=_decimal(row[4]),
-                verified_new_customer_count=_decimal(row[5]),
-                positive_review_count=_decimal(row[6]),
+                platform_code=str(row[1]),
+                platform_name=_platform_name(str(row[1])),
+                owner=str(row[2]),
+                row_type="detail",
+                paid_amount=_decimal(row[3]),
+                verified_amount=_decimal(row[4]),
+                verified_count=_decimal(row[5]),
+                verified_new_customer_count=_decimal(row[6]),
+                positive_review_count=_decimal(row[7]),
             )
             for row in cursor.fetchall()
         ]
+    return _compose_report_rows(detail_rows, platform_codes)
 
 
 def render_daily_region_report(
@@ -128,112 +141,566 @@ def render_daily_region_report(
     logo_path: str | None = None,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path = output_path.with_suffix(".html")
+    html_path.write_text(_render_daily_region_report_html(report, font_path, logo_path), encoding="utf-8")
+    _screenshot_html(html_path, output_path)
+    return output_path
 
-    width = 1200
-    scale = 3
-    margin = 44
-    card_gap = 18
-    header_h = 188
-    summary_h = 132
-    section_title_h = 34
-    table_header_h = 58
-    row_h = 48
-    yesterday_table_h = section_title_h + table_header_h + max(1, len(report.yesterday_rows)) * row_h
-    month_table_h = section_title_h + table_header_h + max(1, len(report.month_rows)) * row_h
-    height = (
-        margin * 2
-        + header_h
-        + card_gap
-        + summary_h
-        + card_gap
-        + summary_h
-        + card_gap
-        + yesterday_table_h
-        + card_gap
-        + month_table_h
-        + 26
-    )
 
-    fonts = _load_fonts(font_path, scale=scale)
-    s = lambda value: int(round(value * scale))
-    box = lambda values: tuple(s(value) for value in values)
-
-    brand_blue = "#1437f5"
-    deep_blue = "#0826b8"
-    brand_yellow = "#ffc400"
-    image = Image.new("RGB", (s(width), s(height)), brand_blue)
-    draw = ImageDraw.Draw(image)
-
-    logo = _prepare_logo(logo_path, max_width=s(210), max_height=s(150), brand_blue=brand_blue)
-    if logo:
-        image.paste(logo, (s(width - margin - 230), s(margin + 12)), logo if logo.mode == "RGBA" else None)
-
-    title_x = margin + 16
-    title = "彭世修脚团购日报"
+def _render_daily_region_report_html(
+    report: DailyReportData,
+    font_path: str | None = None,
+    logo_path: str | None = None,
+) -> str:
+    yesterday_by_key = _rows_by_key(report.yesterday_rows)
+    month_by_key = _rows_by_key(report.month_rows)
+    ordered_keys = _ordered_row_keys(report.yesterday_rows, report.month_rows)
+    overview = _grand_row(report.yesterday_rows)
+    month_overview = _grand_row(report.month_rows)
+    logo_html = _logo_html(logo_path)
+    font_face = _font_face_css(font_path)
+    platform_label = "美团 / 抖音" if report.platform_code in {"all", "combined", "multi"} else _platform_name(report.platform_code)
     subtitle = (
-        f"{_platform_name(report.platform_code)} | {report.report_date:%Y-%m-%d} | "
+        f"{platform_label} | {report.report_date:%Y-%m-%d} | "
         f"本月累计 {report.month_start:%m.%d}-{report.report_date:%m.%d}"
     )
-    draw.text((s(title_x), s(margin + 32)), title, font=fonts["title"], fill="#ffffff")
-    draw.rounded_rectangle(box((title_x, margin + 96, title_x + 86, margin + 105)), radius=s(5), fill=brand_yellow)
-    draw.text((s(title_x), s(margin + 122)), subtitle, font=fonts["body"], fill="#f7fbff")
 
-    y = margin + header_h + card_gap
-    _draw_summary_card(
-        image,
-        draw,
-        box,
-        s,
-        fonts,
-        (margin, y, width - margin, y + summary_h),
-        "昨日汇总数据",
-        _summary_items(report.yesterday_rows),
-        brand_yellow,
-    )
-    y += summary_h + card_gap
-    _draw_summary_card(
-        image,
-        draw,
-        box,
-        s,
-        fonts,
-        (margin, y, width - margin, y + summary_h),
-        "本月累计汇总数据",
-        _summary_items(report.month_rows),
-        brand_yellow,
-    )
-    y += summary_h + card_gap
-    _draw_region_table(
-        draw,
-        box,
-        s,
-        fonts,
-        (margin, y, width - margin, y + yesterday_table_h),
-        "昨日大区数据",
-        report.yesterday_rows,
-        deep_blue,
-        section_title_h,
-        table_header_h,
-        row_h,
-    )
-    y += yesterday_table_h + card_gap
-    _draw_region_table(
-        draw,
-        box,
-        s,
-        fonts,
-        (margin, y, width - margin, y + month_table_h),
-        "本月累计大区数据",
-        report.month_rows,
-        deep_blue,
-        section_title_h,
-        table_header_h,
-        row_h,
+    overview_cards = [
+        ("昨日", "核销金额", _money(overview.verified_amount)),
+        ("昨日", "核销订单", _number(overview.verified_count)),
+        ("昨日", "核销新客", _number(overview.verified_new_customer_count)),
+        ("昨日", "好评率", _rate(overview.positive_review_count, overview.verified_count)),
+        ("本月", "核销金额", _money(month_overview.verified_amount)),
+        ("本月", "核销订单", _number(month_overview.verified_count)),
+        ("本月", "核销新客", _number(month_overview.verified_new_customer_count)),
+        ("本月", "好评率", _rate(month_overview.positive_review_count, month_overview.verified_count)),
+    ]
+
+    cards_html = "\n".join(
+        f"""
+          <div class="kpi-card{' month' if period == '本月' else ''}">
+            <div class="kpi-period">{period}</div>
+            <div class="kpi-label">{html.escape(label)}</div>
+            <div class="kpi-value">{html.escape(value)}</div>
+          </div>
+        """
+        for period, label, value in overview_cards
     )
 
-    image = image.resize((width, height), Image.Resampling.LANCZOS)
-    image.save(output_path, "PNG", optimize=True)
-    return output_path
+    body_html = "\n".join(
+        _render_report_row(
+            yesterday_by_key.get(key) or _empty_row(*key),
+            month_by_key.get(key) or _empty_row(*key),
+        )
+        for key in ordered_keys
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>彭世修脚团购日报</title>
+  <style>
+    {font_face}
+    :root {{
+      --brand-blue: #1739f2;
+      --brand-blue-dark: #0b1f9a;
+      --brand-yellow: #ffd200;
+      --ink: #10182f;
+      --muted: #64708a;
+      --line: #e8edf7;
+      --soft-blue: #eef3ff;
+      --soft-yellow: #fff7d9;
+      --white: #ffffff;
+      --shadow: 0 16px 34px rgba(4, 18, 122, 0.18);
+      --radius-xl: 24px;
+      --radius-lg: 18px;
+    }}
+    * {{ box-sizing: border-box; }}
+    html, body {{
+      margin: 0;
+      width: 1680px;
+      font-family: ReportFont, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--brand-blue);
+      line-height: 1.45;
+    }}
+    .page {{
+      width: 1680px;
+      padding: 50px 58px 58px;
+      background:
+        radial-gradient(circle at 85% 8%, rgba(255,255,255,.16), transparent 22%),
+        linear-gradient(180deg, #183cf5 0%, #1739f2 46%, #112bd5 100%);
+    }}
+    .hero {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+      color: #fff;
+      margin-bottom: 24px;
+    }}
+    .title-wrap h1 {{
+      font-size: 54px;
+      font-weight: 650;
+      letter-spacing: .04em;
+      margin: 0;
+    }}
+    .title-line {{
+      width: 104px;
+      height: 10px;
+      background: var(--brand-yellow);
+      border-radius: 999px;
+      margin: 22px 0 16px;
+    }}
+    .subtitle {{
+      font-size: 22px;
+      opacity: .94;
+      letter-spacing: .02em;
+      font-weight: 650;
+    }}
+    .brand-logo {{
+      width: 220px;
+      min-width: 220px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+    }}
+    .brand-logo img {{
+      width: 190px;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 10px 18px rgba(0,0,0,.12));
+    }}
+    .brand-text {{
+      text-align: right;
+      min-width: 210px;
+      font-weight: 800;
+      letter-spacing: .05em;
+    }}
+    .brand-text-main {{ font-size: 30px; }}
+    .brand-text-sub {{ font-size: 13px; opacity: .9; margin-top: 4px; }}
+    .section {{
+      background: var(--white);
+      border-radius: var(--radius-xl);
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }}
+    .section::before {{
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 14px;
+      background: var(--brand-yellow);
+    }}
+    .section-inner {{ padding: 30px 28px 26px; }}
+    .section-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 16px;
+    }}
+    .section-title {{
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0;
+    }}
+    .overview-grid {{
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }}
+    .kpi-card {{
+      min-height: 104px;
+      padding: 16px 15px;
+      border-right: 1px solid var(--line);
+      background: #fff;
+    }}
+    .kpi-card:nth-child(8) {{ border-right: none; }}
+    .kpi-card.month {{ background: #fbfcff; }}
+    .kpi-period {{
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--brand-blue);
+      background: var(--soft-blue);
+      margin-bottom: 8px;
+      font-weight: 800;
+    }}
+    .kpi-label {{
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 5px;
+      font-weight: 650;
+    }}
+    .kpi-value {{
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+      white-space: nowrap;
+    }}
+    .table-toolbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }}
+    .legend {{
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 650;
+    }}
+    .legend-item {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .dot {{
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }}
+    .dot.total {{ background: var(--brand-blue); }}
+    .dot.meituan {{ background: #00b978; }}
+    .dot.douyin {{ background: #111827; }}
+    .table-wrap {{
+      width: 100%;
+      overflow: visible;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #fff;
+    }}
+    table.report-table {{
+      width: 100%;
+      min-width: 0;
+      table-layout: fixed;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 14px;
+    }}
+    .report-table th,
+    .report-table td {{
+      padding: 11px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+      white-space: nowrap;
+      font-weight: 650;
+    }}
+    .report-table thead th {{
+      color: var(--brand-blue-dark);
+      font-weight: 850;
+      background: var(--soft-blue);
+      text-align: center;
+    }}
+    .report-table thead tr:first-child th {{
+      font-size: 16px;
+      border-bottom: 2px solid #dce6ff;
+      text-align: center;
+    }}
+    .report-table thead th:first-child,
+    .report-table thead th:nth-child(2),
+    .report-table tbody td:first-child,
+    .report-table tbody td:nth-child(2) {{
+      text-align: left;
+    }}
+    .report-table tbody tr:last-child td {{ border-bottom: none; }}
+    .report-table tbody tr:nth-child(even):not(.group-row):not(.grand-row) td {{ background: #fbfcff; }}
+    .grand-row td {{
+      background: #e9f0ff;
+      font-weight: 900;
+      color: var(--brand-blue-dark);
+    }}
+    .group-row td {{
+      background: var(--soft-yellow);
+      font-weight: 900;
+      color: #473b00;
+    }}
+    .platform-badge {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 48px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 850;
+    }}
+    .badge-total {{ color: #fff; background: var(--brand-blue); }}
+    .badge-meituan {{ color: #037750; background: #dff8ee; }}
+    .badge-douyin {{ color: #111827; background: #edf0f6; }}
+    .split-left {{ border-left: 2px solid #d7e1fb; }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div class="title-wrap">
+        <h1>彭世修脚团购日报</h1>
+        <div class="title-line"></div>
+        <div class="subtitle">{html.escape(subtitle)}</div>
+      </div>
+      {logo_html}
+    </header>
+
+    <section class="section">
+      <div class="section-inner">
+        <div class="section-header">
+          <h2 class="section-title">全平台总览</h2>
+        </div>
+        <div class="overview-grid">
+          {cards_html}
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-inner">
+        <div class="table-toolbar">
+          <h2 class="section-title">大区 × 平台经营矩阵</h2>
+          <div class="legend" aria-label="图例">
+            <span class="legend-item"><span class="dot total"></span>合计</span>
+            <span class="legend-item"><span class="dot meituan"></span>美团</span>
+            <span class="legend-item"><span class="dot douyin"></span>抖音</span>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th rowspan="2">大区 / 负责人</th>
+                <th rowspan="2">平台</th>
+                <th colspan="6">昨日数据</th>
+                <th colspan="6" class="split-left">本月累计数据</th>
+              </tr>
+              <tr>
+                <th>下单金额</th>
+                <th>核销金额</th>
+                <th>核销订单数</th>
+                <th>核销新客数</th>
+                <th>好评数</th>
+                <th>好评率</th>
+                <th class="split-left">下单金额</th>
+                <th>核销金额</th>
+                <th>核销订单数</th>
+                <th>核销新客数</th>
+                <th>好评数</th>
+                <th>好评率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {body_html}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def _screenshot_html(html_path: Path, output_path: Path) -> None:
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except Exception:
+            browser = playwright.chromium.launch(channel="chrome", headless=True)
+        page = browser.new_page(viewport={"width": 1680, "height": 900}, device_scale_factor=1)
+        page.goto(html_path.as_uri(), wait_until="networkidle")
+        page.locator(".page").screenshot(path=str(output_path))
+        browser.close()
+
+
+def _compose_report_rows(detail_rows: list[RegionSummary], platform_codes: list[str]) -> list[RegionSummary]:
+    rows: list[RegionSummary] = []
+    rows.append(_sum_rows("全区汇总", "", "total", "合计", "grand", detail_rows))
+    for platform_code in platform_codes:
+        rows.append(
+            _sum_rows(
+                "全区汇总",
+                "",
+                platform_code,
+                _platform_name(platform_code),
+                "detail",
+                [row for row in detail_rows if row.platform_code == platform_code],
+            )
+        )
+
+    for region in REPORT_REGIONS:
+        region_rows = [row for row in detail_rows if row.region == region]
+        owner = _join_owners(region_rows)
+        rows.append(_sum_rows(region, owner, "total", "合计", "group", region_rows))
+        for platform_code in platform_codes:
+            platform_rows = [row for row in region_rows if row.platform_code == platform_code]
+            if platform_rows:
+                rows.append(platform_rows[0])
+            else:
+                rows.append(_empty_row(region, platform_code, owner=owner))
+    return rows
+
+
+def _sum_rows(
+    region: str,
+    owner: str,
+    platform_code: str,
+    platform_name: str,
+    row_type: str,
+    rows: list[RegionSummary],
+) -> RegionSummary:
+    return RegionSummary(
+        region=region,
+        owner=owner,
+        platform_code=platform_code,
+        platform_name=platform_name,
+        row_type=row_type,
+        paid_amount=_total_paid_amount(rows),
+        verified_amount=_total_verified_amount(rows),
+        verified_count=_total_verified_count(rows),
+        verified_new_customer_count=_total_verified_new_customer_count(rows),
+        positive_review_count=_total_positive_review_count(rows),
+    )
+
+
+def _join_owners(rows: list[RegionSummary]) -> str:
+    owners = sorted({row.owner for row in rows if row.owner and row.owner != "未配置"})
+    return "、".join(owners) if owners else "未配置"
+
+
+def _rows_by_key(rows: list[RegionSummary]) -> dict[tuple[str, str], RegionSummary]:
+    return {(row.region, row.platform_code): row for row in rows}
+
+
+def _ordered_row_keys(*row_groups: list[RegionSummary]) -> list[tuple[str, str]]:
+    keys = [("全区汇总", "total")]
+    for platform_code in REPORT_PLATFORMS:
+        keys.append(("全区汇总", platform_code))
+    for region in REPORT_REGIONS:
+        keys.append((region, "total"))
+        for platform_code in REPORT_PLATFORMS:
+            keys.append((region, platform_code))
+
+    available = {key for rows in row_groups for key in _rows_by_key(rows)}
+    extras = sorted(available - set(keys))
+    return keys + extras
+
+
+def _grand_row(rows: list[RegionSummary]) -> RegionSummary:
+    for row in rows:
+        if row.region == "全区汇总" and row.platform_code == "total":
+            return row
+    return _sum_rows("全区汇总", "", "total", "合计", "grand", rows)
+
+
+def _empty_row(region: str, platform_code: str, owner: str = "未配置") -> RegionSummary:
+    return RegionSummary(
+        region=region,
+        owner="" if region == "全区汇总" else owner,
+        platform_code=platform_code,
+        platform_name="合计" if platform_code == "total" else _platform_name(platform_code),
+        row_type="grand" if region == "全区汇总" and platform_code == "total" else "detail",
+        paid_amount=Decimal("0"),
+        verified_amount=Decimal("0"),
+        verified_count=Decimal("0"),
+        verified_new_customer_count=Decimal("0"),
+        positive_review_count=Decimal("0"),
+    )
+
+
+def _render_report_row(yesterday: RegionSummary, month: RegionSummary) -> str:
+    row_type = yesterday.row_type if yesterday.row_type != "detail" else month.row_type
+    row_class = {"grand": "grand-row", "group": "group-row"}.get(row_type, "")
+    area = yesterday.region
+    owner = yesterday.owner or month.owner
+    area_text = area if not owner or area == "全区汇总" else f"{area} / {owner}"
+    platform = yesterday.platform_name
+    badge_class = _platform_badge_class(yesterday.platform_code)
+    return f"""
+      <tr class="{row_class}">
+        <td>{html.escape(area_text)}</td>
+        <td><span class="platform-badge {badge_class}">{html.escape(platform)}</span></td>
+        <td>{html.escape(_money(yesterday.paid_amount))}</td>
+        <td>{html.escape(_money(yesterday.verified_amount))}</td>
+        <td>{html.escape(_number(yesterday.verified_count))}</td>
+        <td>{html.escape(_number(yesterday.verified_new_customer_count))}</td>
+        <td>{html.escape(_number(yesterday.positive_review_count))}</td>
+        <td>{html.escape(_rate(yesterday.positive_review_count, yesterday.verified_count))}</td>
+        <td class="split-left">{html.escape(_money(month.paid_amount))}</td>
+        <td>{html.escape(_money(month.verified_amount))}</td>
+        <td>{html.escape(_number(month.verified_count))}</td>
+        <td>{html.escape(_number(month.verified_new_customer_count))}</td>
+        <td>{html.escape(_number(month.positive_review_count))}</td>
+        <td>{html.escape(_rate(month.positive_review_count, month.verified_count))}</td>
+      </tr>
+    """
+
+
+def _platform_badge_class(platform_code: str) -> str:
+    if platform_code == "total":
+        return "badge-total"
+    if platform_code == "meituan":
+        return "badge-meituan"
+    if platform_code == "douyin":
+        return "badge-douyin"
+    return "badge-total"
+
+
+def _logo_html(logo_path: str | None) -> str:
+    logo_data = _prepare_logo_data_uri(logo_path)
+    if logo_data:
+        return f'<div class="brand-logo"><img src="{logo_data}" alt="彭世修脚" /></div>'
+    return """
+      <div class="brand-text">
+        <div class="brand-text-main">彭世修脚</div>
+        <div class="brand-text-sub">全国连锁 · 非物质文化遗产</div>
+      </div>
+    """
+
+
+def _prepare_logo_data_uri(logo_path: str | None) -> str | None:
+    if not logo_path or not Path(logo_path).exists():
+        return None
+    with Image.open(logo_path).convert("RGBA") as image:
+        bbox = image.getchannel("A").getbbox()
+        if bbox:
+            image = image.crop(bbox)
+        with TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "logo.png"
+            image.save(target)
+            encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _font_face_css(font_path: str | None) -> str:
+    if not font_path or not Path(font_path).exists():
+        return ""
+    encoded = base64.b64encode(Path(font_path).read_bytes()).decode("ascii")
+    suffix = Path(font_path).suffix.lower().lstrip(".") or "ttf"
+    return f"""
+      @font-face {{
+        font-family: ReportFont;
+        src: url(data:font/{suffix};base64,{encoded});
+        font-weight: 400 900;
+      }}
+    """
 
 
 def send_wecom_image(webhook_url: str, image_path: Path) -> dict:
@@ -292,221 +759,5 @@ def _total_positive_review_count(rows: list[RegionSummary]) -> Decimal:
     return sum((row.positive_review_count for row in rows), Decimal("0"))
 
 
-def _summary_items(rows: list[RegionSummary]) -> list[tuple[str, str]]:
-    return [
-        ("下单金额", _money(_total_paid_amount(rows))),
-        ("核销金额", _money(_total_verified_amount(rows))),
-        ("核销订单数", _number(_total_verified_count(rows))),
-        ("好评数", _number(_total_positive_review_count(rows))),
-    ]
-
-
 def _platform_name(platform_code: str) -> str:
-    return {"meituan": "美团", "douyin": "抖音"}.get(platform_code, platform_code)
-
-
-def _prepare_logo(logo_path: str | None, *, max_width: int, max_height: int, brand_blue: str):
-    if not logo_path or not Path(logo_path).exists():
-        return None
-    image = Image.open(logo_path).convert("RGBA")
-    alpha_box = image.getbbox()
-    if alpha_box:
-        image = image.crop(alpha_box)
-
-    bg = _hex_to_rgb(brand_blue)
-    pixels = image.load()
-    min_x, min_y = image.width, image.height
-    max_x, max_y = 0, 0
-    for y in range(0, image.height, 4):
-        for x in range(0, image.width, 4):
-            r, g, b, a = pixels[x, y]
-            if a > 0 and abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2]) > 60:
-                min_x = min(min_x, x)
-                min_y = min(min_y, y)
-                max_x = max(max_x, x)
-                max_y = max(max_y, y)
-    if max_x <= min_x or max_y <= min_y:
-        cropped = image
-    else:
-        pad = 24
-        cropped = image.crop(
-            (
-                max(0, min_x - pad),
-                max(0, min_y - pad),
-                min(image.width, max_x + pad),
-                min(image.height, max_y + pad),
-            )
-        )
-
-    scale = min(max_width / cropped.width, max_height / cropped.height)
-    size = (max(1, int(cropped.width * scale)), max(1, int(cropped.height * scale)))
-    return cropped.resize(size, Image.Resampling.LANCZOS)
-
-
-def _draw_top_accent_card(
-    image: Image.Image,
-    rect: tuple[int, int, int, int],
-    *,
-    radius: int,
-    accent_h: int,
-    accent_fill: str,
-    body_fill: str,
-) -> None:
-    x1, y1, x2, y2 = rect
-    width = x2 - x1
-    height = y2 - y1
-    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    layer_draw = ImageDraw.Draw(layer)
-    layer_draw.rectangle((0, 0, width, height), fill=accent_fill)
-    layer_draw.rectangle((0, accent_h, width, height), fill=body_fill)
-
-    mask = Image.new("L", (width, height), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle((0, 0, width, height), radius=radius, fill=255)
-    layer.putalpha(mask)
-    image.paste(layer, (x1, y1), layer)
-
-
-def _draw_summary_card(
-    image: Image.Image,
-    draw: ImageDraw.ImageDraw,
-    box,
-    s,
-    fonts,
-    rect: tuple[int, int, int, int],
-    title: str,
-    items: list[tuple[str, str]],
-    brand_yellow: str,
-) -> None:
-    x1, y1, x2, y2 = rect
-    _draw_top_accent_card(
-        image,
-        box(rect),
-        radius=s(22),
-        accent_h=s(14),
-        accent_fill=brand_yellow,
-        body_fill="#ffffff",
-    )
-    draw.text((s(x1 + 24), s(y1 + 28)), title, font=fonts["small"], fill="#0826b8")
-    item_w = (x2 - x1 - 48) / len(items)
-    for index, (label, value) in enumerate(items):
-        x = x1 + 24 + index * item_w
-        if index:
-            draw.line(box((x - 16, y1 + 48, x - 16, y2 - 28)), fill="#e6ecfa", width=s(2))
-        draw.text((s(x), s(y1 + 58)), label, font=fonts["small"], fill="#52617d")
-        draw.text((s(x), s(y1 + 91)), value, font=fonts["metric"], fill="#07142f")
-
-
-def _draw_region_table(
-    draw: ImageDraw.ImageDraw,
-    box,
-    s,
-    fonts,
-    rect: tuple[int, int, int, int],
-    title: str,
-    rows: list[RegionSummary],
-    deep_blue: str,
-    section_title_h: int,
-    table_header_h: int,
-    row_h: int,
-) -> None:
-    x1, y1, x2, y2 = rect
-    draw.rounded_rectangle(box(rect), radius=s(22), fill="#ffffff")
-    draw.text((s(x1 + 24), s(y1 + 12)), title, font=fonts["section"], fill="#07142f")
-
-    columns = [
-        ("大区", 120),
-        ("负责人", 180),
-        ("下单金额", 145),
-        ("核销金额", 145),
-        ("核销订单数", 135),
-        ("核销新客数", 135),
-        ("好评数", 115),
-        ("好评率", 115),
-    ]
-    header_y = y1 + section_title_h
-    draw.rounded_rectangle(box((x1 + 14, header_y + 8, x2 - 14, header_y + table_header_h - 8)), radius=s(14), fill="#eef4ff")
-    x = x1 + 24
-    for label, col_w in columns:
-        draw.text((s(x), s(header_y + 18)), label, font=fonts["table_header"], fill=deep_blue)
-        x += col_w
-
-    if not rows:
-        draw.text((s(x1 + 24), s(header_y + table_header_h + 24)), "暂无数据", font=fonts["body"], fill="#53607a")
-        return
-
-    for row_index, row in enumerate(rows):
-        row_y = header_y + table_header_h + row_index * row_h
-        if row_index % 2 == 1:
-            draw.rounded_rectangle(box((x1 + 14, row_y + 4, x2 - 14, row_y + row_h - 4)), radius=s(10), fill="#f4f7ff")
-        values = [
-            row.region,
-            row.owner,
-            _money(row.paid_amount),
-            _money(row.verified_amount),
-            _number(row.verified_count),
-            _number(row.verified_new_customer_count),
-            _number(row.positive_review_count),
-            _rate(row.positive_review_count, row.verified_count),
-        ]
-        x = x1 + 24
-        for (label, col_w), value in zip(columns, values):
-            draw.text(
-                (s(x), s(row_y + 11)),
-                _fit_text(draw, value, fonts["table"], s(col_w - 12)),
-                font=fonts["table"],
-                fill="#101828",
-            )
-            x += col_w
-
-
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
-    value = value.lstrip("#")
-    return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))
-
-
-def _load_fonts(font_path: str | None, *, scale: int = 1) -> dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont]:
-    regular_candidates = [
-        font_path,
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-    ]
-    bold_candidates = [
-        font_path,
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-    ]
-    regular = next((path for path in regular_candidates if path and Path(path).exists()), None)
-    bold = next((path for path in bold_candidates if path and Path(path).exists()), regular)
-
-    def font(size: int, *, use_bold: bool = False):
-        target = bold if use_bold else regular
-        if target:
-            return ImageFont.truetype(target, size=size * scale)
-        return ImageFont.load_default()
-
-    return {
-        "title": font(42, use_bold=True),
-        "metric": font(31, use_bold=True),
-        "body": font(22, use_bold=True),
-        "small": font(18, use_bold=True),
-        "section": font(21, use_bold=True),
-        "table_header": font(20, use_bold=True),
-        "table": font(19, use_bold=True),
-    }
-
-
-def _fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
-    if draw.textlength(text, font=font) <= max_width:
-        return text
-    result = text
-    while result and draw.textlength(result + "...", font=font) > max_width:
-        result = result[:-1]
-    return result + "..." if result else "..."
+    return {"all": "美团 / 抖音", "combined": "美团 / 抖音", "multi": "美团 / 抖音", "meituan": "美团", "douyin": "抖音"}.get(platform_code, platform_code)

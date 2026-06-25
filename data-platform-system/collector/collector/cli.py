@@ -26,7 +26,7 @@ def main() -> None:
 
     report_parser = subparsers.add_parser("daily-report", help="生成并可选推送大区汇总日报图片")
     report_parser.add_argument("--date", help="日报日期，格式 YYYY-MM-DD；默认昨天")
-    report_parser.add_argument("--platform", default="meituan", help="平台编码，默认 meituan")
+    report_parser.add_argument("--platform", default="all", help="平台编码，默认 all（美团+抖音）")
     report_parser.add_argument("--output", help="输出 PNG 路径；默认写入日志目录")
     report_parser.add_argument("--send", action="store_true", help="发送到企业微信机器人")
 
