@@ -698,7 +698,10 @@
 	        setStatus("正在确认入库...");
 	        try {
 	          const result = await request(`/imports/${currentBatchId}/commit`, { method: "POST", body: formData });
-	          const doneText = `入库完成。\n写入指标值：${result.stats.inserted_metric_values}\n跳过重复：${result.stats.skipped_duplicates}\n异常行：${result.stats.warnings}`;
+	          const periodText = result.stats.period_start && result.stats.period_end
+	            ? `\n识别日期范围：${result.stats.period_start} 至 ${result.stats.period_end}`
+	            : "";
+	          const doneText = `入库完成。\n写入指标值：${result.stats.inserted_metric_values}\n跳过重复：${result.stats.skipped_duplicates}\n异常行：${result.stats.warnings}${periodText}`;
 	          setStatus(doneText);
 	          if (messageBox) {
 	            messageBox.className = "commit-message";

@@ -117,7 +117,7 @@ def commit_file_to_metric_values(
     date_field: str | None = None,
     store_code_field: str | None = None,
     store_name_field: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     profile = load_platform_profile(batch.platform_code)
     df = _read_table(path, profile)
     mappings = _load_mappings(db, batch.platform_code)
@@ -139,6 +139,7 @@ def commit_file_to_metric_values(
     skipped = 0
     warnings = 0
     seen_store_codes: set[str] = set()
+    parsed_dates: list[date] = []
     for index, row in df.iterrows():
         raw_data = {str(key): _clean_raw_value(value) for key, value in row.to_dict().items()}
         metric_date = _parse_date(raw_data.get(selected_date_field))
@@ -151,6 +152,8 @@ def commit_file_to_metric_values(
         if not metric_date or not store_code:
             row_warning = "缺少日期或门店，未写入指标明细。"
             warnings += 1
+        elif metric_date:
+            parsed_dates.append(metric_date)
 
         db.add(
             RawImportRow(
@@ -210,9 +213,19 @@ def commit_file_to_metric_values(
 
     batch.row_count = len(df)
     batch.warning_count = warnings
+    if parsed_dates:
+        batch.period_start = min(parsed_dates)
+        batch.period_end = max(parsed_dates)
     batch.status = "imported"
     db.commit()
-    return {"rows": len(df), "inserted_metric_values": inserted, "skipped_duplicates": skipped, "warnings": warnings}
+    return {
+        "rows": len(df),
+        "inserted_metric_values": inserted,
+        "skipped_duplicates": skipped,
+        "warnings": warnings,
+        "period_start": str(batch.period_start),
+        "period_end": str(batch.period_end),
+    }
 
 
 def _load_mappings(db: Session, platform_code: str) -> list[FieldMapping]:
