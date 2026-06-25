@@ -396,6 +396,12 @@ async def _run_step(
         locator = await _find_locator(page, selector)
         await locator.fill(value or "")
         return
+    if step.action == "fill_douyin_task_name":
+        await _fill_douyin_task_name(page, value or "")
+        return
+    if step.action == "confirm_douyin_task_name":
+        await _click_douyin_task_name_confirm(page)
+        return
     if step.action == "wait":
         await page.wait_for_timeout((step.seconds or 1) * 1000)
         return
@@ -491,6 +497,152 @@ async def _click_download_button(page, selector: str) -> None:
         await page.wait_for_timeout(500)
 
     raise CollectorError(f"找不到下载按钮：{selector}")
+
+
+async def _fill_douyin_task_name(page, task_name: str) -> None:
+    """Fill Douyin's task-name dialog with structure-tolerant DOM probing."""
+    if not task_name:
+        raise CollectorError("fill_douyin_task_name step 缺少 value")
+
+    script = """
+    (taskName) => {
+      const visible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const textOf = (element) => String(element.innerText || element.textContent || '').trim();
+      const zIndexOf = (element) => {
+        const value = Number.parseInt(window.getComputedStyle(element).zIndex || '0', 10);
+        return Number.isFinite(value) ? value : 0;
+      };
+      const roots = Array.from(document.querySelectorAll([
+        '.byted-modal',
+        '.byted-content-container',
+        '[role="dialog"]',
+        '[class*="modal"]',
+        '[class*="Modal"]'
+      ].join(',')))
+        .filter(visible)
+        .sort((a, b) => zIndexOf(b) - zIndexOf(a));
+
+      const preferredRoots = roots.filter((root) => {
+        const text = textOf(root);
+        return text.includes('任务命名') || text.includes('请输入任务名');
+      });
+      const searchRoots = preferredRoots.length ? preferredRoots : roots.concat([document]);
+
+      for (const root of searchRoots) {
+        const inputs = Array.from(root.querySelectorAll('input, textarea'))
+          .filter((input) => visible(input) && !input.disabled && input.type !== 'hidden');
+        const input = inputs.find((candidate) => {
+          const placeholder = String(candidate.getAttribute('placeholder') || '');
+          return placeholder.includes('任务名') || placeholder === '';
+        }) || inputs[0];
+        if (!input) continue;
+
+        input.scrollIntoView({ block: 'center', inline: 'center' });
+        input.focus();
+        const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) {
+          setter.call(input, taskName);
+        } else {
+          input.value = taskName;
+        }
+        for (const type of ['input', 'change']) {
+          input.dispatchEvent(new Event(type, { bubbles: true }));
+        }
+        return true;
+      }
+      return false;
+    }
+    """
+
+    deadline = monotonic() + 30
+    while monotonic() < deadline:
+        await _clear_blocking_overlays(page)
+        for context in [page, *page.frames]:
+            try:
+                if await context.evaluate(script, task_name):
+                    await page.wait_for_timeout(500)
+                    return
+            except Exception:
+                continue
+        await page.wait_for_timeout(500)
+
+    raise CollectorError("找不到抖音任务命名输入框")
+
+
+async def _click_douyin_task_name_confirm(page) -> None:
+    script = """
+    () => {
+      const visible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const textOf = (element) => String(element.innerText || element.textContent || '').trim();
+      const zIndexOf = (element) => {
+        const value = Number.parseInt(window.getComputedStyle(element).zIndex || '0', 10);
+        return Number.isFinite(value) ? value : 0;
+      };
+      const roots = Array.from(document.querySelectorAll([
+        '.byted-modal',
+        '.byted-content-container',
+        '[role="dialog"]',
+        '[class*="modal"]',
+        '[class*="Modal"]'
+      ].join(',')))
+        .filter(visible)
+        .sort((a, b) => zIndexOf(b) - zIndexOf(a));
+      const preferredRoots = roots.filter((root) => {
+        const text = textOf(root);
+        return text.includes('任务命名') || text.includes('请输入任务名');
+      });
+      const searchRoots = preferredRoots.length ? preferredRoots : roots;
+
+      for (const root of searchRoots) {
+        const buttons = Array.from(root.querySelectorAll('button, [role="button"], .byted-confirm-ok'))
+          .filter(visible);
+        const button = buttons.find((candidate) => textOf(candidate) === '确定')
+          || buttons.find((candidate) => String(candidate.className || '').includes('byted-confirm-ok'));
+        if (!button) continue;
+        button.scrollIntoView({ block: 'center', inline: 'center' });
+        const options = { bubbles: true, cancelable: true, view: window };
+        for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+          button.dispatchEvent(new MouseEvent(type, options));
+        }
+        button.click();
+        return true;
+      }
+      return false;
+    }
+    """
+
+    deadline = monotonic() + 30
+    while monotonic() < deadline:
+        await _clear_blocking_overlays(page)
+        for context in [page, *page.frames]:
+            try:
+                if await context.evaluate(script):
+                    await page.wait_for_timeout(500)
+                    return
+            except Exception:
+                continue
+        await page.wait_for_timeout(500)
+
+    raise CollectorError("找不到抖音任务命名确定按钮")
 
 
 async def _click_form_control_by_label(page, label_text: str) -> None:

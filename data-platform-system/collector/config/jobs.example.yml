@@ -9,12 +9,13 @@ jobs:
     steps:
       - action: wait
         seconds: 8
+      - action: ensure_meituan_all_shops
       - action: click
         selector: "button.card-button"
       - action: wait
         seconds: 2
-      - action: click
-        selector: ".download-modal .mtd-date-picker-editor"
+      - action: click_form_control_by_label
+        value: "时间范围"
       - action: wait
         seconds: 1
       - action: click
@@ -56,11 +57,11 @@ jobs:
         seconds: 2
       - action: click
         selector: "button:has-text('创建下载任务')"
-      - action: fill
-        selector: ".byted-modal:has-text('任务命名') input[placeholder='请输入任务名']"
+      - action: wait
+        seconds: 1
+      - action: fill_douyin_task_name
         value: "{task_name}"
-      - action: click
-        selector: ".byted-modal:has-text('任务命名') .byted-confirm-ok"
+      - action: confirm_douyin_task_name
       - action: wait
         seconds: 2
     download_center_url: "https://www.life-data.cn/data-bazaar/my/tasks?groupid=1732422563964928"
