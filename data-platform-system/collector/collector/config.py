@@ -25,6 +25,8 @@ class Settings:
     timezone: str
     wecom_webhook_url: str | None
     daily_report_cron: str | None
+    franchise_wecom_webhook_url: str | None
+    franchise_daily_report_cron: str | None
     report_font_path: str | None
     report_logo_path: str | None
 
@@ -91,6 +93,8 @@ def load_settings() -> Settings:
         timezone=os.getenv("COLLECTOR_TIMEZONE", "Asia/Shanghai"),
         wecom_webhook_url=os.getenv("WECOM_WEBHOOK_URL") or None,
         daily_report_cron=os.getenv("WECOM_DAILY_REPORT_CRON", "30 8 * * *") or None,
+        franchise_wecom_webhook_url=os.getenv("WECOM_FRANCHISE_WEBHOOK_URL") or None,
+        franchise_daily_report_cron=os.getenv("WECOM_FRANCHISE_REPORT_CRON", "35 8 * * *") or None,
         report_font_path=os.getenv("WECOM_REPORT_FONT_PATH") or None,
         report_logo_path=os.getenv("WECOM_REPORT_LOGO_PATH") or None,
     )

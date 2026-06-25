@@ -41,17 +41,24 @@ def main() -> None:
         )
         logging.info("已注册采集任务 %s cron=%s", job.code, job.schedule_cron)
 
-    if settings.wecom_webhook_url and settings.daily_report_cron:
-        scheduler.add_job(
-            _send_daily_report_sync,
-            CronTrigger.from_crontab(settings.daily_report_cron, timezone=settings.timezone),
-            args=[settings],
-            id="wecom_daily_report",
-            replace_existing=True,
-        )
-        logging.info("已注册企业微信日报推送任务 cron=%s", settings.daily_report_cron)
-    else:
-        logging.info("未启用企业微信日报推送任务，检查 WECOM_WEBHOOK_URL 和 WECOM_DAILY_REPORT_CRON")
+    _add_daily_report_job(
+        scheduler,
+        settings,
+        scope="direct",
+        webhook_url=settings.wecom_webhook_url,
+        cron=settings.daily_report_cron,
+        job_id="wecom_daily_report_direct",
+        label="直营",
+    )
+    _add_daily_report_job(
+        scheduler,
+        settings,
+        scope="franchise",
+        webhook_url=settings.franchise_wecom_webhook_url,
+        cron=settings.franchise_daily_report_cron,
+        job_id="wecom_daily_report_franchise",
+        label="加盟",
+    )
 
     scheduler.start()
 
@@ -66,18 +73,41 @@ def _run_job_sync(job: CollectorJob, settings) -> None:
     logging.info("采集任务完成 %s result=%s", job.code, result)
 
 
-def _send_daily_report_sync(settings) -> None:
+def _add_daily_report_job(
+    scheduler: BlockingScheduler,
+    settings,
+    *,
+    scope: str,
+    webhook_url: str | None,
+    cron: str | None,
+    job_id: str,
+    label: str,
+) -> None:
+    if webhook_url and cron:
+        scheduler.add_job(
+            _send_daily_report_sync,
+            CronTrigger.from_crontab(cron, timezone=settings.timezone),
+            args=[settings, scope, webhook_url, label],
+            id=job_id,
+            replace_existing=True,
+        )
+        logging.info("已注册%s企业微信日报推送任务 cron=%s", label, cron)
+    else:
+        logging.info("未启用%s企业微信日报推送任务，检查对应 WECOM webhook 和 cron", label)
+
+
+def _send_daily_report_sync(settings, scope: str, webhook_url: str, label: str) -> None:
     report_date = datetime.now(ZoneInfo(settings.timezone)).date() - timedelta(days=1)
-    output_path = settings.logs_dir / f"daily_region_report_meituan_{report_date:%Y%m%d}.png"
-    logging.info("开始企业微信日报推送 date=%s", report_date)
+    output_path = settings.logs_dir / f"daily_region_report_{scope}_all_{report_date:%Y%m%d}.png"
+    logging.info("开始%s企业微信日报推送 date=%s", label, report_date)
     try:
-        report = fetch_daily_region_report(settings, report_date, "meituan")
+        report = fetch_daily_region_report(settings, report_date, "all", scope)
         image_path = render_daily_region_report(report, output_path, settings.report_font_path, settings.report_logo_path)
-        result = send_wecom_image(settings.wecom_webhook_url, image_path)
+        result = send_wecom_image(webhook_url, image_path)
     except Exception:
-        logging.exception("企业微信日报推送失败 date=%s", report_date)
+        logging.exception("%s企业微信日报推送失败 date=%s", label, report_date)
         raise
-    logging.info("企业微信日报推送完成 date=%s rows=%s result=%s", report_date, len(report.rows), result)
+    logging.info("%s企业微信日报推送完成 date=%s rows=%s result=%s", label, report_date, len(report.rows), result)
 
 
 def _setup_logging(logs_dir: Path) -> None:

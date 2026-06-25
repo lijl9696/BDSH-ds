@@ -27,6 +27,7 @@ METRIC_CODES = (
 )
 
 REPORT_REGIONS = ("郑北", "郑中", "郑东")
+FRANCHISE_REPORT_REGIONS = ("华北", "华中", "华东")
 REPORT_PLATFORMS = ("meituan", "douyin")
 
 
@@ -48,6 +49,8 @@ class RegionSummary:
 class DailyReportData:
     report_date: date
     platform_code: str
+    scope: str
+    regions: tuple[str, ...]
     yesterday_rows: list[RegionSummary]
     month_rows: list[RegionSummary]
 
@@ -80,26 +83,43 @@ class DailyReportData:
         return _total_positive_review_count(self.yesterday_rows)
 
 
-def fetch_daily_region_report(settings: Settings, report_date: date, platform_code: str = "all") -> DailyReportData:
+def fetch_daily_region_report(
+    settings: Settings,
+    report_date: date,
+    platform_code: str = "all",
+    scope: str = "direct",
+) -> DailyReportData:
     month_start = report_date.replace(day=1)
+    regions = _scope_regions(scope)
     with psycopg.connect(settings.database_url) as connection:
-        yesterday_rows = _fetch_region_rows(connection, report_date, report_date, platform_code)
-        month_rows = _fetch_region_rows(connection, month_start, report_date, platform_code)
+        yesterday_rows = _fetch_region_rows(connection, report_date, report_date, platform_code, scope, regions)
+        month_rows = _fetch_region_rows(connection, month_start, report_date, platform_code, scope, regions)
     return DailyReportData(
         report_date=report_date,
         platform_code=platform_code,
+        scope=scope,
+        regions=regions,
         yesterday_rows=yesterday_rows,
         month_rows=month_rows,
     )
 
 
-def _fetch_region_rows(connection, start_date: date, end_date: date, platform_code: str) -> list[RegionSummary]:
+def _fetch_region_rows(
+    connection,
+    start_date: date,
+    end_date: date,
+    platform_code: str,
+    scope: str,
+    regions: tuple[str, ...],
+) -> list[RegionSummary]:
     platform_codes = list(REPORT_PLATFORMS) if platform_code in {"all", "combined", "multi"} else [platform_code]
+    store_type_filter = _scope_store_type(scope)
+    store_type_clause = "AND stores.store_type = %s" if store_type_filter else ""
     query = """
     SELECT
       COALESCE(stores.region, '未配置') AS region,
       metric_values.platform_code AS platform_code,
-      COALESCE(NULLIF(string_agg(DISTINCT NULLIF(stores.owner, ''), '、'), ''), '未配置') AS owner,
+      COALESCE(NULLIF(stores.owner, ''), '未配置') AS owner,
       SUM(CASE WHEN metric_values.metric_code = 'paid_amount' THEN metric_values.value ELSE 0 END) AS paid_amount,
       SUM(CASE WHEN metric_values.metric_code = 'verified_amount' THEN metric_values.value ELSE 0 END) AS verified_amount,
       -- Douyin exports coupon verification count but no order-count field.
@@ -121,11 +141,21 @@ def _fetch_region_rows(connection, start_date: date, end_date: date, platform_co
       AND metric_values.metric_date BETWEEN %s AND %s
       AND metric_values.metric_code = ANY(%s)
       AND COALESCE(stores.region, '未配置') = ANY(%s)
-    GROUP BY COALESCE(stores.region, '未配置'), metric_values.platform_code
-    ORDER BY region ASC, platform_code ASC;
-    """
+      {store_type_clause}
+    GROUP BY COALESCE(stores.region, '未配置'), COALESCE(NULLIF(stores.owner, ''), '未配置'), metric_values.platform_code
+    ORDER BY region ASC, owner ASC, platform_code ASC;
+    """.format(store_type_clause=store_type_clause)
+    params = [
+        platform_codes,
+        start_date,
+        end_date,
+        list(METRIC_CODES),
+        list(regions),
+    ]
+    if store_type_filter:
+        params.append(store_type_filter)
     with connection.cursor() as cursor:
-        cursor.execute(query, (platform_codes, start_date, end_date, list(METRIC_CODES), list(REPORT_REGIONS)))
+        cursor.execute(query, params)
         detail_rows = [
             RegionSummary(
                 region=str(row[0]),
@@ -141,7 +171,7 @@ def _fetch_region_rows(connection, start_date: date, end_date: date, platform_co
             )
             for row in cursor.fetchall()
         ]
-    return _compose_report_rows(detail_rows, platform_codes)
+    return _compose_report_rows(detail_rows, platform_codes, regions)
 
 
 def render_daily_region_report(
@@ -164,14 +194,14 @@ def _render_daily_region_report_html(
 ) -> str:
     yesterday_by_key = _rows_by_key(report.yesterday_rows)
     month_by_key = _rows_by_key(report.month_rows)
-    ordered_keys = _ordered_row_keys(report.yesterday_rows, report.month_rows)
+    ordered_keys = _ordered_row_keys(report.regions, report.yesterday_rows, report.month_rows)
     overview = _grand_row(report.yesterday_rows)
     month_overview = _grand_row(report.month_rows)
     logo_html = _logo_html(logo_path)
     font_face = _font_face_css(font_path)
     platform_label = "美团 / 抖音" if report.platform_code in {"all", "combined", "multi"} else _platform_name(report.platform_code)
     subtitle = (
-        f"{platform_label} | {report.report_date:%Y-%m-%d} | "
+        f"{_scope_title(report.scope)} | {platform_label} | {report.report_date:%Y-%m-%d} | "
         f"本月累计 {report.month_start:%m.%d}-{report.report_date:%m.%d}"
     )
 
@@ -540,7 +570,11 @@ def _screenshot_html(html_path: Path, output_path: Path) -> None:
         browser.close()
 
 
-def _compose_report_rows(detail_rows: list[RegionSummary], platform_codes: list[str]) -> list[RegionSummary]:
+def _compose_report_rows(
+    detail_rows: list[RegionSummary],
+    platform_codes: list[str],
+    regions: tuple[str, ...],
+) -> list[RegionSummary]:
     rows: list[RegionSummary] = []
     rows.append(_sum_rows("全区汇总", "", "total", "合计", "grand", detail_rows))
     for platform_code in platform_codes:
@@ -555,9 +589,8 @@ def _compose_report_rows(detail_rows: list[RegionSummary], platform_codes: list[
             )
         )
 
-    for region in REPORT_REGIONS:
-        region_rows = [row for row in detail_rows if row.region == region]
-        owner = _join_owners(region_rows)
+    for region, owner in _ordered_region_owner_pairs(detail_rows, regions):
+        region_rows = [row for row in detail_rows if row.region == region and row.owner == owner]
         rows.append(_sum_rows(region, owner, "total", "合计", "group", region_rows))
         for platform_code in platform_codes:
             platform_rows = [row for row in region_rows if row.platform_code == platform_code]
@@ -590,20 +623,35 @@ def _sum_rows(
     )
 
 
-def _join_owners(rows: list[RegionSummary]) -> str:
-    owners = sorted({row.owner for row in rows if row.owner and row.owner != "未配置"})
-    return "、".join(owners) if owners else "未配置"
+def _ordered_region_owner_pairs(
+    rows: list[RegionSummary],
+    regions: tuple[str, ...],
+) -> list[tuple[str, str]]:
+    region_rank = {region: index for index, region in enumerate(regions)}
+    pairs = {(row.region, row.owner or "未配置") for row in rows}
+    for region in regions:
+        if not any(pair_region == region for pair_region, _ in pairs):
+            pairs.add((region, "未配置"))
+    return sorted(pairs, key=lambda item: (region_rank.get(item[0], len(region_rank)), item[0], item[1]))
 
 
 def _rows_by_key(rows: list[RegionSummary]) -> dict[tuple[str, str], RegionSummary]:
-    return {(row.region, row.platform_code): row for row in rows}
+    return {(_row_group_key(row), row.platform_code): row for row in rows}
 
 
-def _ordered_row_keys(*row_groups: list[RegionSummary]) -> list[tuple[str, str]]:
+def _ordered_row_keys(fallback_regions: tuple[str, ...], *row_groups: list[RegionSummary]) -> list[tuple[str, str]]:
+    regions = tuple(
+        dict.fromkeys(
+            _row_group_key(row)
+            for rows in row_groups
+            for row in rows
+            if row.region != "全区汇总" and row.platform_code == "total"
+        )
+    ) or fallback_regions
     keys = [("全区汇总", "total")]
     for platform_code in REPORT_PLATFORMS:
         keys.append(("全区汇总", platform_code))
-    for region in REPORT_REGIONS:
+    for region in regions:
         keys.append((region, "total"))
         for platform_code in REPORT_PLATFORMS:
             keys.append((region, platform_code))
@@ -611,6 +659,13 @@ def _ordered_row_keys(*row_groups: list[RegionSummary]) -> list[tuple[str, str]]
     available = {key for rows in row_groups for key in _rows_by_key(rows)}
     extras = sorted(available - set(keys))
     return keys + extras
+
+
+def _row_group_key(row: RegionSummary) -> str:
+    if row.region == "全区汇总":
+        return row.region
+    owner = row.owner or "未配置"
+    return f"{row.region} / {owner}"
 
 
 def _grand_row(rows: list[RegionSummary]) -> RegionSummary:
@@ -621,6 +676,8 @@ def _grand_row(rows: list[RegionSummary]) -> RegionSummary:
 
 
 def _empty_row(region: str, platform_code: str, owner: str = "未配置") -> RegionSummary:
+    if " / " in region:
+        region, owner = region.split(" / ", 1)
     return RegionSummary(
         region=region,
         owner="" if region == "全区汇总" else owner,
@@ -771,3 +828,23 @@ def _total_positive_review_count(rows: list[RegionSummary]) -> Decimal:
 
 def _platform_name(platform_code: str) -> str:
     return {"all": "美团 / 抖音", "combined": "美团 / 抖音", "multi": "美团 / 抖音", "meituan": "美团", "douyin": "抖音"}.get(platform_code, platform_code)
+
+
+def _scope_regions(scope: str) -> tuple[str, ...]:
+    if scope == "franchise":
+        return FRANCHISE_REPORT_REGIONS
+    return REPORT_REGIONS
+
+
+def _scope_store_type(scope: str) -> str | None:
+    if scope == "franchise":
+        return "franchise"
+    if scope == "direct":
+        return "direct"
+    return None
+
+
+def _scope_title(scope: str) -> str:
+    if scope == "franchise":
+        return "加盟门店"
+    return "直营门店"
