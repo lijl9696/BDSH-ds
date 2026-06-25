@@ -66,10 +66,6 @@ services:
       COLLECTOR_LOGS_DIR: /app/logs
       COLLECTOR_HEADLESS: "true"
       COLLECTOR_TIMEZONE: Asia/Shanghai
-      WECOM_WEBHOOK_URL: ${WECOM_WEBHOOK_URL:-}
-      WECOM_DAILY_REPORT_CRON: ${WECOM_DAILY_REPORT_CRON:-30 8 * * *}
-      WECOM_REPORT_LOGO_PATH: ${WECOM_REPORT_LOGO_PATH:-}
-      WECOM_REPORT_FONT_PATH: ${WECOM_REPORT_FONT_PATH:-}
       TZ: Asia/Shanghai
     volumes:
       - ${TG_REPORT_DATA_DIR:?set TG_REPORT_DATA_DIR in .env}/collector/downloads:/app/downloads
