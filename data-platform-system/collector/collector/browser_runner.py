@@ -1168,7 +1168,6 @@ async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
         '.driver-popover',
         '.driver-popover-wrapper',
         '.driver-stage',
-        '.driver-highlighted-element',
         '#driver-popover-content',
         '#guide-notification-modal',
         '.guide-custom-popover',
@@ -1190,11 +1189,27 @@ async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
       for (const element of Array.from(document.querySelectorAll('[class*="driver"], [class*="guide-"]'))) {
         try {
           if (element === document.body || element === document.documentElement) continue;
+          const className = String(element.className || '');
+          if (
+            className.includes('driver-fix-stacking')
+            || className.includes('driver-highlighted-element')
+            || className.includes('driver-no-interaction')
+            || className.includes('driver-active-element')
+          ) {
+            element.classList.remove(
+              'driver-fix-stacking',
+              'driver-highlighted-element',
+              'driver-no-interaction',
+              'driver-active-element'
+            );
+            handled += 1;
+            continue;
+          }
           const text = safeText(element).slice(0, 1000);
           const businessKeywords = [
             '时间范围', '报表预览', '下载', '复制报表', '任务命名',
             '统计周期', '汇总方式', '创建下载任务', '请输入任务名',
-            '昨天', '近7天', '近30天'
+            '昨天', '近7天', '近30天', '全部门店', '报表中心', '使用模板'
           ];
           if (businessKeywords.some((keyword) => text.includes(keyword))) continue;
           element.remove();
@@ -1282,7 +1297,10 @@ async def _clear_blocking_overlays(page, *, aggressive: bool = False) -> int:
       document.body?.classList.remove('driver-active', 'driver-fade');
       for (const element of Array.from(document.querySelectorAll('[class*="driver"]'))) {
         try {
-          if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
+          const className = String(element.className || '');
+          if (className.includes('driver-fix-stacking')) {
+            element.classList.remove('driver-fix-stacking');
+          } else if (element.tagName === 'SVG' || element.getAttribute('aria-controls') === 'driver-popover-content') {
             element.remove();
             handled += 1;
           } else {
