@@ -22,6 +22,7 @@ class CollectorError(RuntimeError):
 
 async def run_job(job: CollectorJob, settings: Settings) -> dict:
     target_date = _target_date(settings)
+    logging.info("%s 目标采集日期 target_date=%s", job.code, target_date)
     downloaded = await _download_expected_file(job, settings, target_date)
 
     client = ReportWebClient(
@@ -44,17 +45,27 @@ async def run_job(job: CollectorJob, settings: Settings) -> dict:
 async def _download_expected_file(job: CollectorJob, settings: Settings, target_date) -> Path:
     attempts = max(1, job.download_retry_attempts)
     for attempt in range(1, attempts + 1):
+        logging.info(
+            "%s 开始下载尝试 attempt=%s/%s target_date=%s direct_date=%s",
+            job.code,
+            attempt,
+            attempts,
+            target_date,
+            True,
+        )
         downloaded = await download_job(
             job,
             settings,
             target_date=target_date,
-            use_direct_date=attempt > 1,
+            use_direct_date=True,
         )
         file_date_range = _date_range_from_filename(downloaded.name)
         if not file_date_range:
+            logging.info("%s 下载文件未识别到日期，跳过文件名日期校验 file=%s", job.code, downloaded.name)
             return downloaded
         start_date, end_date = file_date_range
         if start_date == target_date and end_date == target_date:
+            logging.info("%s 下载文件日期校验通过 file=%s", job.code, downloaded.name)
             return downloaded
         if attempt >= attempts:
             raise CollectorError(
@@ -236,6 +247,7 @@ async def _download_report(
     run_context: dict[str, object] | None = None,
 ) -> Path:
     await _goto_page(page, job.report_page_url)
+    await _log_browser_clock(page, job.code, "after_goto")
     for step in job.steps or []:
         await _run_step(
             page,
@@ -246,6 +258,8 @@ async def _download_report(
         )
     if job.wait_after_trigger_seconds > 0:
         await page.wait_for_timeout(job.wait_after_trigger_seconds * 1000)
+    if target_date:
+        await _log_date_picker_state(page, job.code, target_date, "before_download")
     if job.download_mode == "task_center":
         return await _download_task_center_file(page, job, downloads_dir, run_context or {})
     if job.download_mode == "download_center":
@@ -359,7 +373,8 @@ async def _run_step(
     if step.action == "click":
         if not selector:
             raise CollectorError("click step 缺少 selector")
-        if use_direct_date and target_date and "昨天" in selector:
+        if target_date and "昨天" in selector:
+            logging.info("检测到“昨天”快捷按钮 step，跳过快捷按钮，改为直接选择目标日期 target_date=%s selector=%s", target_date, selector)
             await _click_target_date_range(page, target_date)
             return
         locator = await _find_locator(page, selector)
@@ -753,15 +768,29 @@ async def _ensure_meituan_all_shops(page) -> None:
 
 
 async def _click_target_date_range(page, target_date) -> None:
-    await _clear_blocking_overlays(page)
+    await _log_date_picker_state(page, "date_range", target_date, "before_clear")
+    cleared = await _clear_blocking_overlays(page)
+    if cleared:
+        logging.info("选择目标日期前清理干扰浮层 count=%s target_date=%s", cleared, target_date)
+    await _log_date_picker_state(page, "date_range", target_date, "after_clear")
     if await _confirm_target_date_if_selected(page, target_date):
+        logging.info("目标日期已在输入框中，无需重复选择 target_date=%s", target_date)
         return
+    if not await _has_visible_date_picker(page):
+        await _log_date_picker_state(page, "date_range", target_date, "picker_missing")
+        raise CollectorError(f"日期弹窗未显示，无法选择目标日期：{target_date:%Y-%m-%d}")
     for _ in range(2):
         clicked = await _click_target_date_in_contexts(page, target_date)
         if not clicked:
+            await _log_date_picker_state(page, "date_range", target_date, "target_not_found")
             raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
         await page.wait_for_timeout(500)
+        await _log_date_picker_state(page, "date_range", target_date, "after_click")
     await _click_visible_button_text(page, "确认", required=False)
+    await page.wait_for_timeout(500)
+    if not await _confirm_target_date_if_selected(page, target_date):
+        await _log_date_picker_state(page, "date_range", target_date, "selected_value_mismatch")
+        raise CollectorError(f"目标日期选择后输入框未变为预期范围：{target_date:%Y-%m-%d}")
 
 
 async def _click_target_date_in_contexts(page, target_date) -> bool:
@@ -823,19 +852,195 @@ async def _click_target_date_in_contexts(page, target_date) -> bool:
     return False
 
 
-async def _confirm_target_date_if_selected(page, target_date) -> bool:
-    expected = f"{target_date:%Y-%m-%d} ～ {target_date:%Y-%m-%d}"
-    selected = await page.evaluate(
-        """
-        (expected) => Array.from(document.querySelectorAll('input'))
-          .some((input) => String(input.value || '').trim() === expected)
-        """,
-        expected,
-    )
-    if selected:
-        await _click_visible_button_text(page, "确认", required=False)
-        return True
+async def _has_visible_date_picker(page) -> bool:
+    script = """
+    () => {
+      const visible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      return Array.from(document.querySelectorAll([
+        '.mtd-picker-panel-body-date',
+        '.mtd-date-picker-panel',
+        '.mtd-picker-panel-content',
+        '.byted-date-view',
+        '.byted-date-container',
+        '.byted-popover-wrapper'
+      ].join(','))).some(visible);
+    }
+    """
+    for context in [page, *page.frames]:
+        try:
+            if await context.evaluate(script):
+                return True
+        except Exception:
+            continue
     return False
+
+
+async def _confirm_target_date_if_selected(page, target_date) -> bool:
+    expected = f"{target_date:%Y%m%d}"
+    script = """
+    (expected) => Array.from(document.querySelectorAll('input')).some((input) => {
+      const value = String(input.value || '').trim();
+      const normalized = value.replaceAll('/', '-').replace(/[^0-9]/g, '');
+      const count = normalized.split(expected).length - 1;
+      return count >= 2 || (count >= 1 && !value.includes('～') && !value.includes('~') && !value.includes('至'));
+    })
+    """
+    for context in [page, *page.frames]:
+        try:
+            if await context.evaluate(script, expected):
+                await _click_visible_button_text(page, "确认", required=False)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _log_browser_clock(page, job_code: str, stage: str) -> None:
+    script = """
+    () => ({
+      href: window.location.href,
+      dateString: new Date().toString(),
+      isoString: new Date().toISOString(),
+      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+      language: navigator.language,
+      userAgent: navigator.userAgent.slice(0, 160)
+    })
+    """
+    try:
+        payload = await page.evaluate(script)
+        logging.info("%s 浏览器时间诊断 stage=%s payload=%s", job_code, stage, payload)
+    except Exception as exc:
+        logging.info("%s 浏览器时间诊断失败 stage=%s error=%s", job_code, stage, exc)
+
+
+async def _log_date_picker_state(page, job_code: str, target_date, stage: str) -> None:
+    states = []
+    for index, context in enumerate([page, *page.frames]):
+        try:
+            state = await context.evaluate(
+                """
+                ({ year, month, day }) => {
+                  const visible = (element) => {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.visibility !== 'hidden'
+                      && style.display !== 'none'
+                      && rect.width > 0
+                      && rect.height > 0;
+                  };
+                  const disabled = (element) => {
+                    for (let node = element; node && node !== document.body; node = node.parentElement) {
+                      const className = String(node.className || '');
+                      if (
+                        node.disabled
+                        || node.getAttribute('aria-disabled') === 'true'
+                        || className.includes('disabled')
+                        || className.includes('forbidden')
+                      ) return true;
+                    }
+                    return false;
+                  };
+                  const textOf = (element) => String(element.innerText || element.textContent || '').trim();
+                  const dateInputs = Array.from(document.querySelectorAll('input'))
+                    .filter((input) => visible(input))
+                    .map((input) => ({
+                      placeholder: input.getAttribute('placeholder') || '',
+                      value: input.value || '',
+                      disabled: Boolean(input.disabled),
+                    }))
+                    .filter((input) =>
+                      input.placeholder.includes('时间')
+                      || input.placeholder.includes('日期')
+                      || input.value.includes(String(year))
+                      || input.value.includes('～')
+                    )
+                    .slice(0, 8);
+                  const datePanels = Array.from(document.querySelectorAll([
+                    '.mtd-picker-panel-body-date',
+                    '.mtd-date-picker-panel',
+                    '.mtd-picker-panel-content',
+                    '.byted-date-view',
+                    '.byted-date-container',
+                    '.byted-popover-wrapper'
+                  ].join(','))).filter(visible);
+                  const headerText = `${year}年 ${month}月`;
+                  const targetCandidates = [];
+                  for (const root of datePanels.length ? datePanels : [document]) {
+                    for (const element of Array.from(root.querySelectorAll('td, div, span, button'))) {
+                      if (textOf(element) !== String(day)) continue;
+                      const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
+                      const rect = clickable.getBoundingClientRect();
+                      targetCandidates.push({
+                        text: textOf(element),
+                        className: String(clickable.className || '').slice(0, 140),
+                        visible: visible(clickable),
+                        disabled: disabled(clickable),
+                        rect: {
+                          x: Math.round(rect.x),
+                          y: Math.round(rect.y),
+                          width: Math.round(rect.width),
+                          height: Math.round(rect.height),
+                        },
+                        panelHasTargetMonth: textOf(root).includes(headerText),
+                      });
+                    }
+                  }
+                  const blockingLayers = Array.from(document.querySelectorAll('body *'))
+                    .filter(visible)
+                    .map((element) => {
+                      const style = window.getComputedStyle(element);
+                      const rect = element.getBoundingClientRect();
+                      const zIndex = Number.parseInt(style.zIndex || '0', 10);
+                      return {
+                        tag: element.tagName,
+                        className: String(element.className || '').slice(0, 120),
+                        text: textOf(element).slice(0, 80),
+                        zIndex: Number.isFinite(zIndex) ? zIndex : 0,
+                        position: style.position,
+                        area: Math.round(rect.width * rect.height),
+                      };
+                    })
+                    .filter((item) =>
+                      (item.position === 'fixed' || item.position === 'absolute')
+                      && item.zIndex >= 1000
+                      && item.area >= window.innerWidth * window.innerHeight * 0.04
+                    )
+                    .sort((a, b) => b.zIndex - a.zIndex || b.area - a.area)
+                    .slice(0, 5);
+                  const shortcuts = Array.from(document.querySelectorAll('.mtd-picker-panel-shortcut, [class*="shortcut"], [class*="Shortcut"]'))
+                    .filter(visible)
+                    .map((element) => textOf(element).slice(0, 40))
+                    .filter(Boolean)
+                    .slice(0, 8);
+                  return {
+                    href: window.location.href,
+                    browserDate: new Date().toString(),
+                    target: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+                    dateInputs,
+                    datePanelCount: datePanels.length,
+                    datePanelTexts: datePanels.slice(0, 3).map((panel) => textOf(panel).slice(0, 160)),
+                    shortcuts,
+                    targetCandidates: targetCandidates.slice(0, 12),
+                    blockingLayers,
+                  };
+                }
+                """,
+                {"year": target_date.year, "month": target_date.month, "day": target_date.day},
+            )
+            if state.get("dateInputs") or state.get("datePanelCount") or state.get("targetCandidates") or state.get("blockingLayers"):
+                states.append({"frame": index, "url": context.url, **state})
+        except Exception as exc:
+            states.append({"frame": index, "error": f"{type(exc).__name__}: {exc}"})
+    logging.info("%s 日期选择诊断 stage=%s target_date=%s states=%s", job_code, stage, target_date, states[:4])
 
 
 async def _click_visible_button_text(page, text: str, *, required: bool = True) -> bool:

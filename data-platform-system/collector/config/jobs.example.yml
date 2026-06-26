@@ -2,7 +2,7 @@ jobs:
   - code: meituan_daily
     enabled: false
     platform_code: meituan
-    schedule_cron: "30 8 * * *"
+    schedule_cron: "0 5 * * *"
     state_file: meituan_state.json
     report_page_url: "https://e.dianping.com/app/merchant-platform/0fb1bec0bade47d?iUrl=Ly9oNS5kaWFucGluZy5jb20vdmctcGMtYWR2aWNlL3JlcG9ydC1jZW50ZXIvaW5kZXguaHRtbA"
     download_mode: direct
@@ -18,8 +18,7 @@ jobs:
         value: "时间范围"
       - action: wait
         seconds: 1
-      - action: click
-        selector: ".mtd-picker-panel-shortcut:has-text('昨天')"
+      - action: click_target_date_range
       - action: wait
         seconds: 4
     download_selector: "button[data-click-bid='b_cbg_o9nfc94x_mc']:has-text('下载')"
@@ -32,7 +31,7 @@ jobs:
   - code: douyin_daily
     enabled: false
     platform_code: douyin
-    schedule_cron: "0 7 * * *"
+    schedule_cron: "20 5 * * *"
     state_file: douyin_state.json
     report_page_url: "https://www.life-data.cn/data-bazaar/my/index?groupid=1732422563964928"
     download_mode: task_center
