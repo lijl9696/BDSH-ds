@@ -866,7 +866,13 @@ async def _click_target_date_in_contexts(page, target_date) -> bool:
       for (const root of roots) {
         const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
           .filter((element) => matchesTarget(element))
-          .filter((element) => isVisible(element) && !isDisabled(element));
+          .filter((element) => {
+            const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
+            const monthPanel = clickable.closest('.mtd-picker-panel-content, .byted-date-view, .byted-date-container');
+            return (!monthPanel || monthPanel.innerText.includes(headerText))
+              && isVisible(element)
+              && !isDisabled(element);
+          });
         for (const element of candidates) {
           const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
           fireClick(clickable);
@@ -1012,6 +1018,7 @@ async def _log_date_picker_state(page, job_code: str, target_date, stage: str) -
                     for (const element of Array.from(root.querySelectorAll('td, div, span, button'))) {
                       if (textOf(element) !== String(day)) continue;
                       const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
+                      const monthPanel = clickable.closest('.mtd-picker-panel-content, .byted-date-view, .byted-date-container');
                       const rect = clickable.getBoundingClientRect();
                       targetCandidates.push({
                         text: textOf(element),
@@ -1024,7 +1031,7 @@ async def _log_date_picker_state(page, job_code: str, target_date, stage: str) -
                           width: Math.round(rect.width),
                           height: Math.round(rect.height),
                         },
-                        panelHasTargetMonth: textOf(root).includes(headerText),
+                        panelHasTargetMonth: textOf(monthPanel || root).includes(headerText),
                       });
                     }
                   }
