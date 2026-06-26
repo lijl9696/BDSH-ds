@@ -802,6 +802,9 @@ async def _click_target_date_range(page, target_date) -> None:
             raise CollectorError(f"找不到目标日期：{target_date:%Y-%m-%d}")
         await page.wait_for_timeout(500)
         await _log_date_picker_state(page, "date_range", target_date, "after_click")
+        if await _confirm_target_date_if_selected(page, target_date):
+            logging.info("目标日期已选择完成 target_date=%s", target_date)
+            return
     await _click_visible_button_text(page, "确认", required=False)
     await page.wait_for_timeout(500)
     if not await _confirm_target_date_if_selected(page, target_date):
