@@ -837,9 +837,27 @@ async def _click_target_date_in_contexts(page, target_date) -> bool:
         }
         element.click();
       };
+      const compactTarget = `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`;
+      const looseDayPattern = new RegExp(`(^|\\\\D)${day}(\\\\D|$)`);
+      const matchesTarget = (element) => {
+        const pieces = [
+          element.innerText,
+          element.textContent,
+          element.getAttribute('title'),
+          element.getAttribute('aria-label'),
+          element.getAttribute('data-date'),
+          element.getAttribute('data-value')
+        ].map((value) => String(value || '').trim()).filter(Boolean);
+        for (const value of pieces) {
+          const compact = value.replace(/[^0-9]/g, '');
+          if (compact === String(day) || compact === compactTarget) return true;
+          if (value.length <= 12 && looseDayPattern.test(value)) return true;
+        }
+        return false;
+      };
       const headerText = `${year}年 ${month}月`;
-      const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content'))
-        .filter((root) => root.innerText.includes(headerText));
+      const mtdRoots = Array.from(document.querySelectorAll('.mtd-picker-panel-content, .mtd-picker-panel-body-date, .mtd-date-picker-panel'))
+        .filter((root) => root.innerText.includes(headerText) || root.innerText.includes(String(day)));
       const bytedRoots = Array.from(document.querySelectorAll('.byted-date-view, .byted-date-container, .byted-popover-wrapper'))
         .filter((root) => root.innerText.includes(`${year}年`) || root.innerText.includes(`${month}月`) || root.innerText.includes(String(day)));
       const roots = mtdRoots.length
@@ -847,7 +865,7 @@ async def _click_target_date_in_contexts(page, target_date) -> bool:
         : (bytedRoots.length ? bytedRoots : Array.from(document.querySelectorAll('.mtd-picker-panel-body-date, .mtd-date-picker-panel, .byted-date-container, body')));
       for (const root of roots) {
         const candidates = Array.from(root.querySelectorAll('td, div, span, button'))
-          .filter((element) => element.innerText && element.innerText.trim() === String(day))
+          .filter((element) => matchesTarget(element))
           .filter((element) => isVisible(element) && !isDisabled(element));
         for (const element of candidates) {
           const clickable = element.closest('td, [class*="date-picker-cell"], [class*="date-col"], [class*="date-item"]') || element;
