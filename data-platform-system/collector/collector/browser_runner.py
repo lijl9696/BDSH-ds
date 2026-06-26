@@ -714,10 +714,15 @@ async def _click_form_control_by_label(page, label_text: str) -> None:
 
 async def _ensure_meituan_all_shops(page) -> None:
     """Switch Meituan top-left shop selector to all shops without generic overlay cleanup."""
+    await _clear_blocking_overlays(page, aggressive=True)
     shop = page.locator("#shopName").first
     try:
         current = (await shop.inner_text(timeout=5000)).strip()
     except Exception as exc:
+        body_has_all_shops = await _page_or_frame_has_text(page, "全部门店")
+        if body_has_all_shops:
+            logging.info("找不到美团门店选择器 #shopName，但页面文本已显示全部门店，继续执行。")
+            return
         raise CollectorError("找不到美团门店选择器 #shopName") from exc
     if "全部门店" in current:
         return
@@ -765,6 +770,17 @@ async def _ensure_meituan_all_shops(page) -> None:
         await page.wait_for_timeout(500)
 
     raise CollectorError("无法切换到全部门店")
+
+
+async def _page_or_frame_has_text(page, text: str) -> bool:
+    script = "(text) => String(document.body?.innerText || '').includes(text)"
+    for context in [page, *page.frames]:
+        try:
+            if await context.evaluate(script, text):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _click_target_date_range(page, target_date) -> None:
