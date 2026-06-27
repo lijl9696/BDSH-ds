@@ -368,8 +368,8 @@ COLLECTOR_TIMEZONE=Asia/Shanghai
 美团日报不建议太早执行。平台有时在早上 6:30 还没有生成昨日数据，可能会下载到前一天的旧报表。建议 `/volume1/docker/tg-report/collector/config/jobs.yml` 中美团任务使用：
 
 ```yaml
-schedule_cron: "30 8 * * *"
-download_retry_attempts: 6
+schedule_cron: "0 5 * * *"
+download_retry_attempts: 24
 download_retry_delay_seconds: 600
 ```
 

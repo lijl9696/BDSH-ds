@@ -11,7 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .browser_runner import run_job
 from .config import CollectorJob, load_jobs, load_settings
-from .daily_report import fetch_daily_region_report, render_daily_region_report, send_wecom_image
+from .daily_report import fetch_daily_region_report, render_daily_region_report, report_has_data, send_wecom_image
 
 
 def main() -> None:
@@ -102,6 +102,9 @@ def _send_daily_report_sync(settings, scope: str, webhook_url: str, label: str) 
     logging.info("开始%s企业微信日报推送 date=%s", label, report_date)
     try:
         report = fetch_daily_region_report(settings, report_date, "all", scope)
+        if not report_has_data(report):
+            logging.warning("%s企业微信日报跳过推送：目标日期没有可用数据 date=%s", label, report_date)
+            return
         image_path = render_daily_region_report(report, output_path, settings.report_font_path, settings.report_logo_path)
         result = send_wecom_image(webhook_url, image_path)
     except Exception:

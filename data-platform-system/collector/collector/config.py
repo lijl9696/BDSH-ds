@@ -68,7 +68,7 @@ class CollectorJob:
     duplicate_policy: str = "skip"
     wait_after_trigger_seconds: int = 5
     download_timeout_seconds: int = 600
-    download_retry_attempts: int = 6
+    download_retry_attempts: int = 24
     download_retry_delay_seconds: int = 600
 
 
@@ -92,9 +92,9 @@ def load_settings() -> Settings:
         browser_cdp_url=os.getenv("COLLECTOR_BROWSER_CDP_URL") or None,
         timezone=os.getenv("COLLECTOR_TIMEZONE", "Asia/Shanghai"),
         wecom_webhook_url=os.getenv("WECOM_WEBHOOK_URL") or None,
-        daily_report_cron=os.getenv("WECOM_DAILY_REPORT_CRON", "30 8 * * *") or None,
+        daily_report_cron=os.getenv("WECOM_DAILY_REPORT_CRON", "40 8 * * *") or None,
         franchise_wecom_webhook_url=os.getenv("WECOM_FRANCHISE_WEBHOOK_URL") or None,
-        franchise_daily_report_cron=os.getenv("WECOM_FRANCHISE_REPORT_CRON", "35 8 * * *") or None,
+        franchise_daily_report_cron=os.getenv("WECOM_FRANCHISE_REPORT_CRON", "45 8 * * *") or None,
         report_font_path=os.getenv("WECOM_REPORT_FONT_PATH") or None,
         report_logo_path=os.getenv("WECOM_REPORT_LOGO_PATH") or None,
     )

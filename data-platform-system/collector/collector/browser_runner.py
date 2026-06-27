@@ -53,12 +53,26 @@ async def _download_expected_file(job: CollectorJob, settings: Settings, target_
             target_date,
             True,
         )
-        downloaded = await download_job(
-            job,
-            settings,
-            target_date=target_date,
-            use_direct_date=True,
-        )
+        try:
+            downloaded = await download_job(
+                job,
+                settings,
+                target_date=target_date,
+                use_direct_date=True,
+            )
+        except CollectorError as exc:
+            if attempt >= attempts:
+                raise
+            logging.warning(
+                "%s 下载尝试失败，等待后重试 attempt=%s/%s target_date=%s error=%s",
+                job.code,
+                attempt,
+                attempts,
+                target_date,
+                exc,
+            )
+            await asyncio.sleep(max(1, job.download_retry_delay_seconds))
+            continue
         file_date_range = _date_range_from_filename(downloaded.name)
         if not file_date_range:
             logging.info("%s 下载文件未识别到日期，跳过文件名日期校验 file=%s", job.code, downloaded.name)

@@ -83,6 +83,20 @@ class DailyReportData:
         return _total_positive_review_count(self.yesterday_rows)
 
 
+def report_has_data(report: DailyReportData) -> bool:
+    return any(
+        row.row_type == "detail"
+        and (
+            row.paid_amount
+            or row.verified_amount
+            or row.verified_count
+            or row.verified_new_customer_count
+            or row.positive_review_count
+        )
+        for row in report.yesterday_rows
+    )
+
+
 def fetch_daily_region_report(
     settings: Settings,
     report_date: date,
